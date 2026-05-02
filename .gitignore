@@ -1,0 +1,47 @@
+# 🔹 Python cache files
+
+**pycache**/
+*.pyc
+*.pyo
+*.pyd
+
+# 🔹 Virtual environment
+
+venv/
+env/
+ENV/
+
+# 🔹 Streamlit files
+
+.streamlit/secrets.toml
+
+# 🔹 System files
+
+.DS_Store
+Thumbs.db
+
+# 🔹 IDE files
+
+.vscode/
+.idea/
+
+# 🔹 Logs
+
+*.log
+
+# 🔹 Temporary files
+
+*.tmp
+*.temp
+
+# 🔹 Jupyter Notebook checkpoints
+
+.ipynb_checkpoints/
+
+# 🔹 Environment variables (important)
+
+.env
+
+#  IMPORTANT: DO NOT ignore datasets
+
+# (No *.xlsx or dataset/ here)
