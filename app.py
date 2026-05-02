@@ -423,44 +423,27 @@ with chart_tabs[2]:
 # ── Tab 3: Accelerometer ──────────────────
 with chart_tabs[3]:
     hist = st.session_state.history
-
-    if hist.empty or not all(col in hist.columns for col in ["accel_x", "accel_y", "accel_z"]):
+    if hist.empty or "accel_x" not in hist.columns:
         st.info("No accelerometer data yet.")
     else:
         fig4, axes4 = plt.subplots(1, 3, figsize=(14, 3.5))
-
-        colors = ["#e94560", "#22c55e", "#0f3460"]
-        cols = ["accel_x", "accel_y", "accel_z"]
-
-        for ax4, col, color in zip(axes4, cols, colors):
+        for ax4, col, color in zip(axes4,
+                                   ["accel_x", "accel_y", "accel_z"],
+                                   ["#e94560",  "#22c55e", "#0f3460"]):
             values4 = pd.to_numeric(hist[col], errors="coerce").dropna().values
-
-            if len(values4) > 0:
-                ax4.plot(values4, linewidth=1.5, alpha=0.9)
-                ax4.axhline(values4.mean(), linestyle="--", alpha=0.5)
-
-            ax4.set_title(f"{col.upper()} Axis", fontsize=10, fontweight="bold")
+            if len(values4):
+                ax4.plot(values4, color=color, linewidth=1.4)
+            ax4.set_title(col.upper(), fontsize=10, fontweight="bold")
             ax4.set_ylabel("Acceleration (g)" if col == "accel_x" else "")
             ax4.grid(True, alpha=0.3)
-
-            # ✅ DARK MODE SAFE BACKGROUND
-            ax4.set_facecolor("#0f172a")
-
-            # ✅ TEXT COLOR FIX
-            ax4.tick_params(colors="white")
-            ax4.title.set_color("white")
-            ax4.yaxis.label.set_color("white")
-            ax4.xaxis.label.set_color("white")
-
-        fig4.suptitle("📊 3-Axis Accelerometer", fontsize=12, fontweight="bold", color="white")
-        fig4.patch.set_facecolor("#020617")
-
+            ax4.set_facecolor("white")
+        fig4.suptitle("3-Axis Accelerometer", fontsize=11, fontweight="bold")
+        fig4.patch.set_facecolor("#f8f9fc")
         plt.tight_layout()
         st.pyplot(fig4)
         plt.close(fig4)
 
-# divider
-st.markdown("<hr style='margin:10px 0'>", unsafe_allow_html=True)
+st.markdown("<hr style='margin:8px 0'>", unsafe_allow_html=True)
 
 
 # ─────────────────────────────────────────────
@@ -493,14 +476,13 @@ with stat_col:
     mins, secs = divmod(dur, 60)
     n  = len(st.session_state.history)
     sq = latest.get("signal_quality")
-    st.markdown(f"""
-    <div class="card">
-      <b>⏱️ Session duration</b><br>{mins}m {secs}s<br><br>
-      <b>📦 Readings collected</b><br>{n}<br><br>
-      <b>🚨 Total alerts fired</b><br>{st.session_state.total_alerts}<br><br>
-      <b>📶 Gateway status</b><br>{'🟢 Online' if st.session_state.device_on else '🔴 Offline'}<br><br>
-      <b>⚡ Signal quality</b><br>{sq if sq is not None else '—'}%
-    </div>""", unsafe_allow_html=True)
+    gw = "🟢 Online" if st.session_state.device_on else "🔴 Offline"
+
+    st.metric("⏱️ Session Duration",   f"{mins}m {secs}s")
+    st.metric("📦 Readings Collected", n)
+    st.metric("🚨 Total Alerts Fired", st.session_state.total_alerts)
+    st.metric("📶 Gateway Status",     gw)
+    st.metric("⚡ Signal Quality",     f"{sq}%" if sq is not None else "—")
 
 
 # ─────────────────────────────────────────────
