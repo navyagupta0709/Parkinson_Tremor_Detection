@@ -1,4 +1,6 @@
 Parkinson_Tremor_Detection
+
+
  Parkinson's IoT Wearable Monitoring System
 A full-stack Streamlit web application that simulates a real-time IoT wearable monitoring system for Parkinson's tremor detection — based on the research notebook using KNN, SVM, and Random Forest classifiers.
 
