@@ -423,27 +423,44 @@ with chart_tabs[2]:
 # ── Tab 3: Accelerometer ──────────────────
 with chart_tabs[3]:
     hist = st.session_state.history
-    if hist.empty or "accel_x" not in hist.columns:
+
+    if hist.empty or not all(col in hist.columns for col in ["accel_x", "accel_y", "accel_z"]):
         st.info("No accelerometer data yet.")
     else:
         fig4, axes4 = plt.subplots(1, 3, figsize=(14, 3.5))
-        for ax4, col, color in zip(axes4,
-                                   ["accel_x", "accel_y", "accel_z"],
-                                   ["#e94560",  "#22c55e", "#0f3460"]):
+
+        colors = ["#e94560", "#22c55e", "#0f3460"]
+        cols = ["accel_x", "accel_y", "accel_z"]
+
+        for ax4, col, color in zip(axes4, cols, colors):
             values4 = pd.to_numeric(hist[col], errors="coerce").dropna().values
-            if len(values4):
-                ax4.plot(values4, color=color, linewidth=1.4)
-            ax4.set_title(col.upper(), fontsize=10, fontweight="bold")
+
+            if len(values4) > 0:
+                ax4.plot(values4, linewidth=1.5, alpha=0.9)
+                ax4.axhline(values4.mean(), linestyle="--", alpha=0.5)
+
+            ax4.set_title(f"{col.upper()} Axis", fontsize=10, fontweight="bold")
             ax4.set_ylabel("Acceleration (g)" if col == "accel_x" else "")
             ax4.grid(True, alpha=0.3)
-            ax4.set_facecolor("white")
-        fig4.suptitle("3-Axis Accelerometer", fontsize=11, fontweight="bold")
-        fig4.patch.set_facecolor("#f8f9fc")
+
+            # ✅ DARK MODE SAFE BACKGROUND
+            ax4.set_facecolor("#0f172a")
+
+            # ✅ TEXT COLOR FIX
+            ax4.tick_params(colors="white")
+            ax4.title.set_color("white")
+            ax4.yaxis.label.set_color("white")
+            ax4.xaxis.label.set_color("white")
+
+        fig4.suptitle("📊 3-Axis Accelerometer", fontsize=12, fontweight="bold", color="white")
+        fig4.patch.set_facecolor("#020617")
+
         plt.tight_layout()
         st.pyplot(fig4)
         plt.close(fig4)
 
-st.markdown("<hr style='margin:8px 0'>", unsafe_allow_html=True)
+# divider
+st.markdown("<hr style='margin:10px 0'>", unsafe_allow_html=True)
 
 
 # ─────────────────────────────────────────────
