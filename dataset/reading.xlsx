@@ -1,6 +1,0 @@
-git clone <repo-url>
-cd repo
-copy reading.xlsx here
-git add .
-git commit -m ""C:\Users\Navya Gupta\Downloads\READINGS.xlsx""
-git push
