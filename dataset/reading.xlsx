@@ -1,1 +1,5 @@
+import pandas as pd
 
+df = pd.read_excel("dataset/reading.xlsx")
+
+print(df.head())
