@@ -10,6 +10,58 @@
 # ============================================================
 
 st.markdown("""
+import streamlit as st
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import time
+import datetime
+
+from utils import (
+    generate_sensor_data,
+    generate_tremor_signal,
+    compute_fft,
+    detect_anomalies,
+    classify_tremor,
+    wifi_signal_strength,
+    latency_ms,
+)
+
+st.set_page_config(
+    page_title="TENG Tremor Detection",
+    page_icon="⚡",
+    layout="wide"
+)
+
+st.markdown("""
+<style>
+
+body {
+    background-color: #0f172a;
+}
+
+.main-header {
+    background: linear-gradient(
+        90deg,
+        #111827 0%,
+        #1e293b 100%
+    );
+
+    padding: 20px;
+    border-radius: 12px;
+    margin-bottom: 20px;
+}
+
+.main-header h1 {
+    color: #38bdf8;
+}
+
+.main-header p {
+    color: white;
+}
+
+</style>
+""", unsafe_allow_html=True)
 <div class="main-header">
   <h1>⚡ TENG Parkinson Tremor Detection System</h1>
   <p>
