@@ -3,9 +3,3 @@ numpy
 pandas
 matplotlib
 scipy
-scikit-learn
-pyserial
-plotly
-seaborn
-openpyxl
-joblib
