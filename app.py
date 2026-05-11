@@ -1,511 +1,900 @@
 """
-app.py — Parkinson's IoT Wearable Monitoring System
-Streamlit dashboard replicating the IoT architecture:
-  Wearable → WiFi Gateway → Internet → Web Server → User Dashboard
-
-Fixed: matplotlib axvline None-safety, Python 3.14 compatibility,
-       all float() coercions guarded against None values.
+=============================================================================
+  IEEE TENG Tremor Detection Dashboard
+  Parkinson's Disease — Real-Time FFT Signal Processing Interface
+  Data Source : READINGS.xlsx  (or live Arduino via pyserial)
+=============================================================================
+  Run:  streamlit run teng_dashboard.py
+=============================================================================
 """
 
-import streamlit as st
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
+# ─────────────────────────── Imports ────────────────────────────────────────
 import time
-import datetime
-import os
+import io
+import threading
+from datetime import datetime
+from collections import deque
 
-from utils import (
-    generate_sensor_data,
-    generate_tremor_signal,
-    compute_fft,
-    detect_anomalies,
-    classify_tremor,
-    log_reading,
-    load_log,
-    clear_log,
-    wifi_signal_strength,
-    latency_ms,
-    TREMOR_PATHOLOGICAL_HZ,
-    TREMOR_CRITICAL_HZ,
-)
+import numpy as np
+import pandas as pd
+import streamlit as st
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from scipy.fft import fft, fftfreq
+from scipy.signal import welch, butter, sosfiltfilt, detrend, savgol_filter
+from sklearn.preprocessing import StandardScaler
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.svm import SVC
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.pipeline import Pipeline
 
-# ─────────────────────────────────────────────
-# Page config
-# ─────────────────────────────────────────────
+# ─────────────────────────── Constants ──────────────────────────────────────
+FS            = 100.0          # Sampling frequency (Hz)
+WINDOW_SIZE   = 200            # Samples per analysis window
+STEP_SIZE     = 100            # Overlap step
+TREMOR_LO     = 3.0            # Tremor band lower bound (Hz)
+TREMOR_HI     = 7.0            # Tremor band upper bound (Hz)
+STREAM_WINDOW = 500            # Live plot rolling window (samples)
+EXCEL_PATH    = "READINGS.xlsx"
+
+# ─────────────────────────── Page Config ────────────────────────────────────
 st.set_page_config(
-    page_title="Parkinson's IoT Monitor",
+    page_title="TENG Tremor Detection — IEEE Dashboard",
     page_icon="🧠",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-# ─────────────────────────────────────────────
-# Custom CSS
-# ─────────────────────────────────────────────
+# ─────────────────────────── Dark IEEE Theme ────────────────────────────────
 st.markdown("""
 <style>
-    .main-header {
-        background: linear-gradient(90deg,#1a1a2e 0%,#16213e 50%,#0f3460 100%);
-        padding: 18px 28px; border-radius: 12px; margin-bottom: 24px;
-    }
-    .main-header h1 { color:#e94560; margin:0; font-size:1.8rem; }
-    .main-header p  { color:#a8b2d8; margin:0; font-size:0.9rem; }
-
-    .card {
-        background:#f8f9fc; border:1px solid #e2e8f0;
-        border-radius:10px; padding:16px 20px; margin-bottom:16px;
-    }
-    .card-title {
-        font-weight:700; font-size:0.85rem; color:#2d3748;
-        margin-bottom:8px; text-transform:uppercase; letter-spacing:.04em;
-    }
-
-    .alert-warning {
-        background:#fffbeb; border-left:4px solid #f59e0b;
-        border-radius:6px; padding:10px 14px; margin:5px 0;
-        font-size:0.88rem; color:#92400e;
-    }
-    .alert-critical {
-        background:#fef2f2; border-left:4px solid #ef4444;
-        border-radius:6px; padding:10px 14px; margin:5px 0;
-        font-size:0.88rem; color:#7f1d1d; font-weight:600;
-    }
-    .alert-ok {
-        background:#f0fdf4; border-left:4px solid #22c55e;
-        border-radius:6px; padding:10px 14px; margin:5px 0;
-        font-size:0.88rem; color:#14532d;
-    }
-
-    .arch-box {
-        display:inline-block; background:#1a1a2e; color:#e2e8f0;
-        border-radius:8px; padding:10px 16px; font-size:0.82rem;
-        font-weight:600; text-align:center; min-width:100px;
-    }
-    .arch-arrow { color:#e94560; font-size:1.3rem; margin:0 4px; vertical-align:middle; }
-
-    .pill-green {
-        background:#dcfce7; color:#166534; border-radius:999px;
-        padding:3px 12px; font-size:0.8rem; font-weight:700; display:inline-block;
-    }
-    .pill-red {
-        background:#fee2e2; color:#7f1d1d; border-radius:999px;
-        padding:3px 12px; font-size:0.8rem; font-weight:700; display:inline-block;
-    }
-    #MainMenu, footer { visibility:hidden; }
+/* ---------- base -------------------------------------------------------- */
+html, body, [data-testid="stAppViewContainer"] {
+    background-color: #0a0e1a;
+    color: #e0e6f0;
+    font-family: 'Courier New', Courier, monospace;
+}
+[data-testid="stSidebar"] {
+    background-color: #0d1322;
+    border-right: 1px solid #1e2d4a;
+}
+/* ---------- header banner ---------------------------------------------- */
+.ieee-header {
+    background: linear-gradient(135deg, #0d1b2a 0%, #102040 50%, #0d1b2a 100%);
+    border: 1px solid #1e4070;
+    border-radius: 6px;
+    padding: 18px 24px;
+    margin-bottom: 16px;
+    text-align: center;
+}
+.ieee-header h1 {
+    color: #00c8ff;
+    font-size: 1.6rem;
+    letter-spacing: 2px;
+    margin: 0;
+    text-shadow: 0 0 12px #00c8ff55;
+}
+.ieee-header p {
+    color: #7898b8;
+    font-size: 0.75rem;
+    margin: 4px 0 0;
+    letter-spacing: 1px;
+}
+/* ---------- section cards ---------------------------------------------- */
+.section-card {
+    background: #0d1425;
+    border: 1px solid #1a2e4a;
+    border-radius: 6px;
+    padding: 14px 18px;
+    margin-bottom: 14px;
+}
+.section-title {
+    color: #00c8ff;
+    font-size: 0.72rem;
+    font-weight: bold;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    margin-bottom: 10px;
+    border-bottom: 1px solid #1a2e4a;
+    padding-bottom: 6px;
+}
+/* ---------- metric tiles ------------------------------------------------ */
+.metric-row { display: flex; gap: 10px; flex-wrap: wrap; }
+.metric-tile {
+    flex: 1 1 130px;
+    background: #0f1e35;
+    border: 1px solid #1a3a5c;
+    border-radius: 6px;
+    padding: 12px 14px;
+    text-align: center;
+    min-width: 120px;
+}
+.metric-tile .label {
+    font-size: 0.65rem;
+    color: #607898;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+}
+.metric-tile .value {
+    font-size: 1.4rem;
+    font-weight: bold;
+    color: #00c8ff;
+    margin-top: 4px;
+    font-family: 'Courier New', monospace;
+}
+.metric-tile .unit {
+    font-size: 0.65rem;
+    color: #607898;
+}
+/* ---------- alert boxes ------------------------------------------------- */
+.alert-tremor {
+    background: #2a0a0a;
+    border: 2px solid #ff2222;
+    border-radius: 8px;
+    padding: 20px;
+    text-align: center;
+    animation: pulse-red 1.2s ease-in-out infinite;
+}
+.alert-tremor h2 { color: #ff4444; font-size: 1.8rem; margin: 0; letter-spacing: 4px; }
+.alert-tremor p  { color: #ff8888; font-size: 0.85rem; margin: 6px 0 0; }
+@keyframes pulse-red {
+    0%, 100% { box-shadow: 0 0 8px #ff000055;  border-color: #ff2222; }
+    50%       { box-shadow: 0 0 24px #ff0000bb; border-color: #ff5555; }
+}
+.alert-normal {
+    background: #0a1f12;
+    border: 2px solid #22cc55;
+    border-radius: 8px;
+    padding: 20px;
+    text-align: center;
+}
+.alert-normal h2 { color: #33ee66; font-size: 1.8rem; margin: 0; letter-spacing: 3px; }
+.alert-normal p  { color: #66cc88; font-size: 0.85rem; margin: 6px 0 0; }
+/* ---------- severity badge --------------------------------------------- */
+.sev-mild     { color: #ffdd55; font-weight: bold; }
+.sev-moderate { color: #ff9933; font-weight: bold; }
+.sev-severe   { color: #ff3333; font-weight: bold; }
+/* ---------- model prediction card -------------------------------------- */
+.pred-card {
+    background: #0f1e35;
+    border: 1px solid #1a3a5c;
+    border-left: 4px solid #00c8ff;
+    border-radius: 6px;
+    padding: 14px;
+}
+.pred-card .class-name { font-size: 1.3rem; color: #00ffcc; font-weight: bold; }
+.pred-card .conf       { font-size: 0.8rem;  color: #7898b8; margin-top: 4px; }
+/* ---------- footer ----------------------------------------------------- */
+.footer {
+    text-align: center;
+    color: #2a3a5a;
+    font-size: 0.65rem;
+    padding: 10px 0;
+    letter-spacing: 1px;
+    border-top: 1px solid #1a2e4a;
+    margin-top: 20px;
+}
+/* ---------- plotly override -------------------------------------------- */
+.js-plotly-plot .plotly .modebar { background: transparent !important; }
 </style>
 """, unsafe_allow_html=True)
 
 
-# ─────────────────────────────────────────────
-# Session state
-# ─────────────────────────────────────────────
-def init_state():
-    defaults = {
-        "device_on":     False,
-        "live_mode":     False,
-        "history":       pd.DataFrame(),
-        "latest":        {},
-        "alerts":        [],
-        "tick":          0,
-        "total_alerts":  0,
-        "session_start": datetime.datetime.now(),
+# ══════════════════════════════════════════════════════════════════════════════
+#  SIGNAL PROCESSING UTILITIES
+# ══════════════════════════════════════════════════════════════════════════════
+
+def remove_outliers(sig: np.ndarray) -> np.ndarray:
+    """IQR-based outlier removal (3× IQR fence)."""
+    q1, q3 = np.percentile(sig, [25, 75])
+    iqr     = q3 - q1
+    mask    = (sig >= q1 - 3*iqr) & (sig <= q3 + 3*iqr)
+    return sig[mask]
+
+
+def process_signal(sig: np.ndarray, fs: float = FS) -> np.ndarray:
+    """
+    Full preprocessing chain:
+      1. Remove DC offset
+      2. Detrend
+      3. 4th-order Butterworth bandpass  0.5–10 Hz
+      4. Savitzky–Golay smoothing  (window=11, poly=3)
+    """
+    s = sig.copy().astype(np.float64)
+    s -= np.mean(s)
+    s  = detrend(s)
+    sos = butter(4, [0.5, 10.0], btype='bandpass', fs=fs, output='sos')
+    s   = sosfiltfilt(sos, s)
+    if len(s) >= 11:
+        s = savgol_filter(s, window_length=11, polyorder=3)
+    return s
+
+
+def compute_fft(sig: np.ndarray, fs: float = FS):
+    """Return positive-frequency FFT amplitude spectrum."""
+    n      = len(sig)
+    freqs  = fftfreq(n, d=1.0/fs)
+    amps   = np.abs(fft(sig)) / n
+    mask   = freqs > 0
+    return freqs[mask], amps[mask]
+
+
+def compute_psd(sig: np.ndarray, fs: float = FS):
+    """Welch PSD with nperseg=256."""
+    nperseg = min(256, len(sig))
+    f, psd  = welch(sig, fs=fs, nperseg=nperseg)
+    return f, psd
+
+
+def dominant_frequency(freqs: np.ndarray, amps: np.ndarray) -> float:
+    """Frequency of the highest FFT amplitude peak."""
+    return float(freqs[np.argmax(amps)])
+
+
+def tremor_power(f_psd: np.ndarray, psd: np.ndarray) -> float:
+    """Integrated PSD power in the 3–7 Hz tremor band."""
+    mask = (f_psd >= TREMOR_LO) & (f_psd <= TREMOR_HI)
+    if mask.any():
+        return float(np.trapezoid(psd[mask], f_psd[mask]))
+    return 0.0
+
+
+def signal_quality(sig: np.ndarray) -> str:
+    """Heuristic SNR-based quality label."""
+    rms = np.sqrt(np.mean(sig**2))
+    if rms > 0.05:
+        return "GOOD"
+    elif rms > 0.01:
+        return "FAIR"
+    return "POOR"
+
+
+def severity_label(dom_freq: float, power: float) -> str:
+    """Classify tremor severity inside the 3–7 Hz band."""
+    if not (TREMOR_LO <= dom_freq <= TREMOR_HI):
+        return "None"
+    if power > 0.5:
+        return "Severe"
+    elif power > 0.1:
+        return "Moderate"
+    return "Mild"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  ML FEATURE EXTRACTION & TRAINING
+# ══════════════════════════════════════════════════════════════════════════════
+
+def extract_features(window: np.ndarray, fs: float = FS) -> dict:
+    n       = len(window)
+    freqs_w, amps_w = compute_fft(window, fs)
+    f_p, psd_w      = compute_psd(window, fs)
+    dom_f   = dominant_frequency(freqs_w, amps_w)
+    band_p  = tremor_power(f_p, psd_w)
+    psd_norm = amps_w / (amps_w.sum() + 1e-12)
+    sp_ent  = -np.sum(psd_norm * np.log2(psd_norm + 1e-12))
+    return {
+        'mean'       : np.mean(window),
+        'std'        : np.std(window, ddof=1),
+        'rms'        : np.sqrt(np.mean(window**2)),
+        'energy'     : np.sum(window**2) / n,
+        'dom_freq'   : dom_f,
+        'sp_entropy' : sp_ent,
+        'psd_peak'   : np.max(psd_w),
+        'band_power' : band_p,
     }
-    for k, v in defaults.items():
-        if k not in st.session_state:
-            st.session_state[k] = v
-
-init_state()
 
 
-# ─────────────────────────────────────────────
-# Sidebar
-# ─────────────────────────────────────────────
+@st.cache_resource(show_spinner=False)
+def train_models(records: list):
+    """Train RF / SVM / KNN on the READINGS dataset (cached)."""
+    rows = []
+    for r in records:
+        sig = r['signal_proc']
+        for i in range(0, len(sig) - WINDOW_SIZE + 1, STEP_SIZE):
+            w    = sig[i : i + WINDOW_SIZE]
+            feat = extract_features(w)
+            feat['bpm'] = r['bpm']
+            rows.append(feat)
+
+    df      = pd.DataFrame(rows)
+    FEAT_COLS = ['mean','std','rms','energy','dom_freq','sp_entropy','psd_peak','band_power']
+    X, y    = df[FEAT_COLS].values, df['bpm'].values
+
+    models = {
+        'Random Forest': Pipeline([('sc', StandardScaler()),
+                                   ('clf', RandomForestClassifier(n_estimators=100, random_state=42))]),
+        'SVM'          : Pipeline([('sc', StandardScaler()),
+                                   ('clf', SVC(probability=True, kernel='rbf', random_state=42))]),
+        'KNN'          : Pipeline([('sc', StandardScaler()),
+                                   ('clf', KNeighborsClassifier(n_neighbors=5))]),
+    }
+    for m in models.values():
+        m.fit(X, y)
+    return models, FEAT_COLS
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  DATA LOADING
+# ══════════════════════════════════════════════════════════════════════════════
+
+@st.cache_data(show_spinner=False)
+def load_excel_data(path: str):
+    """Load all sheets from READINGS.xlsx and build signal records."""
+    try:
+        xl = pd.read_excel(path, sheet_name=None, header=None)
+    except FileNotFoundError:
+        return None, f"File '{path}' not found. Upload it beside this script."
+
+    records = []
+    sid     = 0
+    for sheet_name, df_raw in xl.items():
+        try:
+            bpm      = int(sheet_name.split()[0])
+            freq_hz  = bpm / 60.0
+            df_data  = df_raw.iloc[2:].reset_index(drop=True)
+            df_data.columns = ['t1','v1','t2','v2','t3','v3']
+            for set_idx, vcol in enumerate(['v1','v2','v3'], start=1):
+                raw = pd.to_numeric(df_data[vcol], errors='coerce').dropna().values.astype(np.float64)
+                if len(raw) < WINDOW_SIZE:
+                    continue
+                cleaned = remove_outliers(raw)
+                proc    = process_signal(cleaned)
+                records.append({
+                    'bpm'         : bpm,
+                    'freq_hz'     : freq_hz,
+                    'set_idx'     : set_idx,
+                    'signal_id'   : sid,
+                    'signal_raw'  : raw,
+                    'signal_clean': cleaned,
+                    'signal_proc' : proc,
+                })
+                sid += 1
+        except Exception:
+            continue
+
+    return records, None
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  PLOTLY HELPERS  (dark IEEE theme)
+# ══════════════════════════════════════════════════════════════════════════════
+
+DARK_LAYOUT = dict(
+    paper_bgcolor='#0a0e1a',
+    plot_bgcolor ='#0d1222',
+    font         =dict(color='#a0b4cc', family='Courier New', size=11),
+    margin       =dict(l=50, r=20, t=40, b=40),
+    xaxis        =dict(gridcolor='#1a2840', zerolinecolor='#1a2840', linecolor='#1a2840'),
+    yaxis        =dict(gridcolor='#1a2840', zerolinecolor='#1a2840', linecolor='#1a2840'),
+)
+
+
+def apply_dark(fig):
+    fig.update_layout(**DARK_LAYOUT)
+    return fig
+
+
+def plot_raw_signal(sig: np.ndarray, fs: float = FS) -> go.Figure:
+    t   = np.arange(len(sig)) / fs
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=t, y=sig,
+        mode='lines',
+        line=dict(color='#00c8ff', width=1.2),
+        name='TENG Voltage',
+    ))
+    fig.update_layout(
+        title='Live Raw TENG Signal  ·  Time Domain',
+        xaxis_title='Time (s)',
+        yaxis_title='Amplitude (V)',
+        **DARK_LAYOUT,
+    )
+    return fig
+
+
+def plot_preprocessing_stages(sig_raw: np.ndarray, fs: float = FS) -> go.Figure:
+    """Show 4 preprocessing stages as stacked subplots."""
+    s1 = sig_raw - np.mean(sig_raw)
+    s2 = detrend(s1)
+    sos = butter(4, [0.5, 10.0], btype='bandpass', fs=fs, output='sos')
+    s3  = sosfiltfilt(sos, s2)
+    s4  = savgol_filter(s3, window_length=11, polyorder=3) if len(s3) >= 11 else s3
+
+    labels  = ['DC Removal', 'Detrend', 'Butterworth BPF', 'Savitzky–Golay']
+    signals = [s1, s2, s3, s4]
+    colors  = ['#00c8ff', '#00ffaa', '#ff9933', '#ee44ff']
+
+    fig = make_subplots(rows=4, cols=1, shared_xaxes=True,
+                        subplot_titles=labels, vertical_spacing=0.07)
+
+    for i, (s, c, lbl) in enumerate(zip(signals, colors, labels), start=1):
+        t = np.arange(len(s)) / fs
+        fig.add_trace(go.Scatter(x=t, y=s, mode='lines',
+                                 line=dict(color=c, width=1.0), name=lbl), row=i, col=1)
+
+    fig.update_layout(
+        title='Signal Preprocessing Pipeline',
+        height=520,
+        showlegend=False,
+        **DARK_LAYOUT,
+    )
+    fig.update_xaxes(title_text='Time (s)', row=4, col=1)
+    return fig
+
+
+def plot_fft(freqs: np.ndarray, amps: np.ndarray) -> go.Figure:
+    dom_f = dominant_frequency(freqs, amps)
+    fig   = go.Figure()
+
+    # Tremor band shading
+    fig.add_vrect(
+        x0=TREMOR_LO, x1=TREMOR_HI,
+        fillcolor='rgba(255,40,40,0.12)',
+        line=dict(color='rgba(255,80,80,0.5)', width=1.5, dash='dot'),
+        annotation_text='Tremor Band 3–7 Hz',
+        annotation_position='top left',
+        annotation=dict(font_color='#ff7070', font_size=10),
+    )
+
+    # Full spectrum
+    fig.add_trace(go.Scatter(
+        x=freqs, y=amps,
+        mode='lines', fill='tozeroy',
+        line=dict(color='#00c8ff', width=1.4),
+        fillcolor='rgba(0,200,255,0.06)',
+        name='FFT Amplitude',
+    ))
+
+    # Dominant frequency marker
+    dom_amp = amps[np.argmin(np.abs(freqs - dom_f))]
+    fig.add_trace(go.Scatter(
+        x=[dom_f], y=[dom_amp],
+        mode='markers+text',
+        marker=dict(color='#ffdd22', size=10, symbol='diamond'),
+        text=[f'{dom_f:.2f} Hz'],
+        textposition='top center',
+        textfont=dict(color='#ffdd22', size=10),
+        name='Dominant Freq',
+    ))
+
+    # Harmonics (2×, 3× fundamental if within range)
+    for k in [2, 3]:
+        hf = dom_f * k
+        if hf < 25:
+            ha = amps[np.argmin(np.abs(freqs - hf))]
+            fig.add_trace(go.Scatter(
+                x=[hf], y=[ha],
+                mode='markers',
+                marker=dict(color='#ff9933', size=7, symbol='circle'),
+                name=f'{k}× harmonic',
+            ))
+
+    fig.update_layout(
+        title='FFT Amplitude Spectrum',
+        xaxis_title='Frequency (Hz)',
+        yaxis_title='Amplitude',
+        xaxis=dict(range=[0, 25], gridcolor='#1a2840', zerolinecolor='#1a2840', linecolor='#1a2840'),
+        yaxis=dict(gridcolor='#1a2840', zerolinecolor='#1a2840', linecolor='#1a2840'),
+        **DARK_LAYOUT,
+    )
+    return fig
+
+
+def plot_psd(f_psd: np.ndarray, psd: np.ndarray) -> go.Figure:
+    fig = go.Figure()
+
+    fig.add_vrect(
+        x0=TREMOR_LO, x1=TREMOR_HI,
+        fillcolor='rgba(255,40,40,0.12)',
+        line=dict(color='rgba(255,80,80,0.5)', width=1.5, dash='dot'),
+    )
+
+    fig.add_trace(go.Scatter(
+        x=f_psd, y=psd,
+        mode='lines', fill='tozeroy',
+        line=dict(color='#ff6644', width=1.4),
+        fillcolor='rgba(255,100,60,0.08)',
+        name='PSD (Welch)',
+    ))
+
+    fig.update_layout(
+        title='Welch Power Spectral Density',
+        xaxis_title='Frequency (Hz)',
+        yaxis_title='PSD  (V²/Hz)',
+        xaxis=dict(range=[0, 20], gridcolor='#1a2840', zerolinecolor='#1a2840', linecolor='#1a2840'),
+        yaxis=dict(type='log', gridcolor='#1a2840', zerolinecolor='#1a2840', linecolor='#1a2840'),
+        **DARK_LAYOUT,
+    )
+    return fig
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  ARDUINO SERIAL THREAD  (optional — used when serial port is selected)
+# ══════════════════════════════════════════════════════════════════════════════
+
+class SerialReader(threading.Thread):
+    def __init__(self, port: str, baud: int = 115200, maxlen: int = STREAM_WINDOW):
+        super().__init__(daemon=True)
+        self.port   = port
+        self.baud   = baud
+        self.buffer = deque(maxlen=maxlen)
+        self.running = False
+        self._error  = None
+
+    def run(self):
+        try:
+            import serial
+            self.running = True
+            with serial.Serial(self.port, self.baud, timeout=1) as ser:
+                while self.running:
+                    line = ser.readline().decode('utf-8', errors='ignore').strip()
+                    try:
+                        self.buffer.append(float(line))
+                    except ValueError:
+                        pass
+        except Exception as e:
+            self._error = str(e)
+
+    def stop(self):
+        self.running = False
+
+    def get_data(self) -> np.ndarray:
+        return np.array(list(self.buffer))
+
+    @property
+    def error(self):
+        return self._error
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  SESSION STATE INIT
+# ══════════════════════════════════════════════════════════════════════════════
+
+for k, v in {
+    'serial_reader' : None,
+    'log_rows'      : [],
+    'session_start' : datetime.now(),
+    'analysis_count': 0,
+    'tremor_count'  : 0,
+    'selected_rec'  : 0,
+}.items():
+    if k not in st.session_state:
+        st.session_state[k] = v
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  SIDEBAR
+# ══════════════════════════════════════════════════════════════════════════════
+
 with st.sidebar:
-    st.markdown("## 🎛️ Control Panel")
+    st.markdown("### ⚙ CONTROL PANEL")
     st.markdown("---")
 
-    dev_on = st.toggle("🔌 Wearable Device Power", value=st.session_state.device_on)
-    st.session_state.device_on = dev_on
-
-    if dev_on:
-        st.markdown('<span class="pill-green">● DEVICE ONLINE</span>', unsafe_allow_html=True)
-    else:
-        st.markdown('<span class="pill-red">● DEVICE OFFLINE</span>', unsafe_allow_html=True)
-
-    st.markdown("---")
-    st.markdown("### ⚙️ Simulation Settings")
-    severity = st.selectbox(
-        "Tremor Severity",
-        ["none", "mild", "moderate", "severe"],
-        index=1,
-        help="Simulates different Parkinson's tremor profiles (1–7 Hz range)"
-    )
-    refresh_rate = st.slider("Refresh interval (sec)", 1, 10, 2)
-
-    st.markdown("---")
-    st.markdown("### 🚦 Alert Thresholds")
-    custom_tremor = st.number_input("Tremor alert ≥ (Hz)", 2.0, 7.0, float(TREMOR_PATHOLOGICAL_HZ), 0.5)
-    custom_hr_hi  = st.number_input("Heart rate high (bpm)", 80, 160, 110, 5)
-    custom_hr_lo  = st.number_input("Heart rate low  (bpm)", 30, 70,  50,  5)
-
-    st.markdown("---")
-    st.markdown("### 📋 Logging")
-    log_enabled = st.checkbox("Enable data logging (CSV)", value=True)
-    if st.button("🗑️ Clear Log"):
-        clear_log()
-        st.session_state.history = pd.DataFrame()
-        st.success("Log cleared.")
-
-    st.markdown("---")
-    live = st.toggle("▶️ Live Streaming Mode", value=st.session_state.live_mode)
-    st.session_state.live_mode = live
-
-    st.markdown("---")
-    st.markdown("### ℹ️ About")
-    st.caption(
-        "Parkinson's Tremor Detection IoT Dashboard\n"
-        "Pathological range: 4–7 Hz\n"
-        "Models: KNN / SVM / Random Forest"
+    data_source = st.radio(
+        "DATA SOURCE",
+        ["📁 READINGS.xlsx", "🔌 Arduino Serial"],
+        index=0,
     )
 
+    st.markdown("---")
+    st.markdown("**SIGNAL SELECTOR** *(file mode)*")
+    excel_path = st.text_input("Excel file path", value=EXCEL_PATH, label_visibility="collapsed")
 
-# ─────────────────────────────────────────────
-# Header
-# ─────────────────────────────────────────────
+    st.markdown("---")
+    ml_model_name = st.selectbox(
+        "ML CLASSIFIER",
+        ["Random Forest", "SVM", "KNN"],
+    )
+
+    st.markdown("---")
+    st.markdown("**SERIAL PORT** *(Arduino mode)*")
+    serial_port = st.text_input("Port", value="/dev/ttyUSB0", label_visibility="collapsed")
+    serial_baud = st.selectbox("Baud rate", [9600, 57600, 115200], index=2)
+
+    if data_source == "🔌 Arduino Serial":
+        col1, col2 = st.columns(2)
+        if col1.button("▶ Connect", use_container_width=True):
+            if st.session_state.serial_reader is None:
+                reader = SerialReader(serial_port, serial_baud)
+                reader.start()
+                st.session_state.serial_reader = reader
+                st.success("Serial connected.")
+        if col2.button("⏹ Disconnect", use_container_width=True):
+            if st.session_state.serial_reader:
+                st.session_state.serial_reader.stop()
+                st.session_state.serial_reader = None
+                st.info("Disconnected.")
+
+    st.markdown("---")
+    auto_refresh = st.checkbox("⟳ Auto-refresh (2 s)", value=False)
+    if auto_refresh:
+        time.sleep(2)
+        st.rerun()
+
+    st.markdown("---")
+    st.markdown("**SESSION LOG**")
+    elapsed = (datetime.now() - st.session_state.session_start).seconds
+    st.metric("Elapsed", f"{elapsed//60:02d}:{elapsed%60:02d}")
+    st.metric("Analyses",  st.session_state.analysis_count)
+    st.metric("Tremor Events", st.session_state.tremor_count)
+
+    if st.session_state.log_rows:
+        log_df  = pd.DataFrame(st.session_state.log_rows)
+        csv_buf = io.BytesIO()
+        log_df.to_csv(csv_buf, index=False)
+        st.download_button(
+            "⬇ Download Log CSV",
+            data=csv_buf.getvalue(),
+            file_name=f"teng_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  HEADER BANNER
+# ══════════════════════════════════════════════════════════════════════════════
+
 st.markdown("""
-<div class="main-header">
-  <h1>🧠 Parkinson's IoT Wearable Monitor</h1>
-  <p>Real-time tremor detection · WiFi Gateway · Cloud Processing · Clinical Dashboard</p>
+<div class='ieee-header'>
+  <h1>🧠 TENG TREMOR DETECTION SYSTEM</h1>
+  <p>REAL-TIME FFT SIGNAL PROCESSING  ·  IEEE RESEARCH PROTOTYPE  ·  PARKINSON'S DISEASE DETECTION</p>
 </div>
 """, unsafe_allow_html=True)
 
-
-# ─────────────────────────────────────────────
-# Architecture flow
-# ─────────────────────────────────────────────
-with st.expander("📡 System Architecture — IoT Data Flow", expanded=False):
-    st.markdown("""
-    <div style="text-align:center;padding:20px 0;background:#f8f9fc;border-radius:10px;">
-      <span class="arch-box">⌚ Wearable<br><small>Glove / Watch</small></span>
-      <span class="arch-arrow">──►</span>
-      <span class="arch-box">📶 WiFi<br><small>Gateway</small></span>
-      <span class="arch-arrow">──►</span>
-      <span class="arch-box">☁️ Internet<br><small>Cloud</small></span>
-      <span class="arch-arrow">──►</span>
-      <span class="arch-box">🖥️ Web Server<br><small>ML Processing</small></span>
-      <span class="arch-arrow">──►</span>
-      <span class="arch-box">👤 User<br><small>Dashboard</small></span>
-      <span class="arch-arrow">──►</span>
-      <span class="arch-box">🚨 Alerts &amp;<br><small>Monitoring</small></span>
-    </div>
-    <p style="text-align:center;color:#64748b;font-size:0.84rem;margin-top:10px;">
-      Sensors → FFT Feature Extraction → KNN / SVM / Random Forest → Real-time alerts
-    </p>
-    """, unsafe_allow_html=True)
+ts_col, _, _ = st.columns([2,5,2])
+ts_col.markdown(
+    f"<span style='color:#3a5a7a;font-size:0.72rem;'>⏱ {datetime.now().strftime('%Y-%m-%d  %H:%M:%S')}</span>",
+    unsafe_allow_html=True,
+)
 
 
-# ─────────────────────────────────────────────
-# Helpers
-# ─────────────────────────────────────────────
-def safe_float(val, default=0.0):
-    """Convert val to float; return default on None/error."""
-    try:
-        return float(val)
-    except (TypeError, ValueError):
-        return default
+# ══════════════════════════════════════════════════════════════════════════════
+#  DETERMINE ACTIVE SIGNAL
+# ══════════════════════════════════════════════════════════════════════════════
 
-def display_val(key, fmt, fallback="—"):
-    v = st.session_state.latest.get(key)
-    if v is None:
-        return fallback
-    return fmt.format(v)
+active_signal = None
+records       = None
+error_msg     = None
 
+if data_source == "📁 READINGS.xlsx":
+    records, error_msg = load_excel_data(excel_path)
+    if records:
+        bpm_options = sorted(set(r['bpm'] for r in records))
+        rec_labels  = [f"{r['bpm']} BPM · Set {r['set_idx']} · {r['bpm']/60:.1f} Hz"
+                       for r in records]
 
-def take_reading():
-    reading = generate_sensor_data(st.session_state.device_on, severity)
-    st.session_state.latest       = reading
-    st.session_state.alerts       = detect_anomalies(reading)
-    st.session_state.total_alerts += len(st.session_state.alerts)
-    st.session_state.tick        += 1
+        with st.sidebar:
+            sel_idx = st.selectbox(
+                "SELECT SIGNAL",
+                range(len(records)),
+                format_func=lambda i: rec_labels[i],
+                index=st.session_state.selected_rec,
+            )
+            st.session_state.selected_rec = sel_idx
 
-    if reading.get("device_on"):
-        row = {k: v for k, v in reading.items() if k != "device_on"}
-        row["timestamp"] = row["timestamp"].strftime("%H:%M:%S")
-        new_row = pd.DataFrame([row])
-        st.session_state.history = pd.concat(
-            [st.session_state.history, new_row], ignore_index=True
-        ).tail(120)
-        if log_enabled:
-            log_reading(reading)
+        chosen_rec   = records[sel_idx]
+        active_signal = chosen_rec['signal_proc']
+        raw_signal    = chosen_rec['signal_raw']
 
-
-# Initial reading on first load
-if st.session_state.tick == 0:
-    take_reading()
-
-latest = st.session_state.latest
-
-
-# ─────────────────────────────────────────────
-# Row 1 — Status + Metrics
-# ─────────────────────────────────────────────
-status_col, m1, m2, m3, m4, m5 = st.columns([1.4, 1, 1, 1, 1, 1])
-
-with status_col:
-    st.markdown('<div class="card-title">📡 Connection Status</div>', unsafe_allow_html=True)
-    if st.session_state.device_on:
-        wifi = wifi_signal_strength()
-        lat  = latency_ms()
-        bars = "▂▄▆█" if wifi > -50 else ("▂▄▆_" if wifi > -60 else "▂▄__")
-        st.markdown(f"""
-        <div class="card">
-          <div class="pill-green">● CONNECTED</div><br>
-          <small>📶 WiFi {bars}&nbsp;{wifi} dBm</small><br>
-          <small>⏱️ Latency: {lat} ms</small><br>
-          <small>🕒 {datetime.datetime.now().strftime('%H:%M:%S')}</small><br>
-          <small>🔁 Tick #{st.session_state.tick}</small>
-        </div>""", unsafe_allow_html=True)
+else:  # Arduino
+    reader = st.session_state.serial_reader
+    if reader and reader.error:
+        st.error(f"Serial error: {reader.error}")
+    elif reader:
+        buf = reader.get_data()
+        if len(buf) >= WINDOW_SIZE:
+            raw_signal    = buf
+            cleaned       = remove_outliers(buf)
+            active_signal = process_signal(cleaned)
+        else:
+            st.info(f"Buffering… {len(buf)}/{WINDOW_SIZE} samples")
     else:
-        st.markdown("""
-        <div class="card">
-          <div class="pill-red">● DISCONNECTED</div><br>
-          <small>Device is powered off.</small><br>
-          <small>Enable wearable in sidebar ↑</small>
-        </div>""", unsafe_allow_html=True)
-
-hr_val = latest.get("heart_rate")
-with m1:
-    st.metric("❤️ Heart Rate",
-              display_val("heart_rate", "{} bpm"),
-              delta=f"{int(hr_val) - 72:+d}" if hr_val is not None else None)
-with m2:
-    st.metric("🌡️ Temperature",  display_val("temperature",      "{} °C"))
-with m3:
-    st.metric("〰️ Tremor Freq",  display_val("tremor_freq_hz",   "{} Hz"))
-with m4:
-    st.metric("📳 Tremor Amp",   display_val("tremor_amplitude",  "{} g"))
-with m5:
-    st.metric("🫁 SpO₂",         display_val("spo2",             "{}%"))
-
-st.markdown("<hr style='margin:8px 0'>", unsafe_allow_html=True)
+        st.warning("Click **▶ Connect** in the sidebar to start Arduino acquisition.")
 
 
-# ─────────────────────────────────────────────
-# Row 2 — Alerts + Classification
-# ─────────────────────────────────────────────
-alert_col, class_col = st.columns([1.6, 1])
+# ══════════════════════════════════════════════════════════════════════════════
+#  MAIN DASHBOARD — only when we have a signal
+# ══════════════════════════════════════════════════════════════════════════════
 
-with alert_col:
-    st.markdown("### 🚨 Alerts")
-    if not st.session_state.device_on:
-        st.markdown('<div class="alert-ok">Device offline — no active monitoring.</div>',
-                    unsafe_allow_html=True)
-    elif not st.session_state.alerts:
-        st.markdown('<div class="alert-ok">✅ All vitals normal — no anomalies detected.</div>',
-                    unsafe_allow_html=True)
+if error_msg:
+    st.error(f"⚠ {error_msg}")
+
+elif active_signal is not None and len(active_signal) >= WINDOW_SIZE:
+
+    # ── analysis window (last WINDOW_SIZE samples) ─────────────────────────
+    win_proc  = active_signal[-WINDOW_SIZE:]
+    win_raw   = raw_signal[-WINDOW_SIZE:]
+
+    freqs_f, amps_f = compute_fft(win_proc)
+    f_psd, psd_vals = compute_psd(win_proc)
+    dom_f           = dominant_frequency(freqs_f, amps_f)
+    t_power         = tremor_power(f_psd, psd_vals)
+    sq              = signal_quality(win_proc)
+    sev             = severity_label(dom_f, t_power)
+    detected_bpm    = int(round(dom_f * 60))
+    in_tremor_band  = TREMOR_LO <= dom_f <= TREMOR_HI
+
+    # ── ML prediction ───────────────────────────────────────────────────────
+    if records:
+        models, feat_cols = train_models(records)
+        clf    = models[ml_model_name]
+        feat   = extract_features(win_proc)
+        X_pred = np.array([[feat[c] for c in feat_cols]])
+        pred_bpm   = int(clf.predict(X_pred)[0])
+        pred_proba = clf.predict_proba(X_pred).max()
+        pred_label = f"{pred_bpm} BPM ({pred_bpm/60:.1f} Hz)"
     else:
-        for a in st.session_state.alerts:
-            css = "alert-critical" if a["level"] == "critical" else "alert-warning"
-            st.markdown(f'<div class="{css}">{a["icon"]} {a["message"]}</div>',
-                        unsafe_allow_html=True)
+        pred_label, pred_proba = "N/A", 0.0
 
-with class_col:
-    st.markdown("### 🤖 ML Classification")
-    tf_raw = latest.get("tremor_freq_hz")
-    ta_raw = latest.get("tremor_amplitude")
-    if tf_raw is not None and ta_raw is not None:
-        tf_c = safe_float(tf_raw, 0.0)
-        ta_c = safe_float(ta_raw, 0.0)
-        label, conf = classify_tremor(tf_c, ta_c)
-        colour = ("#ef4444" if "Pathological" in label
-                  else "#f59e0b" if "Borderline" in label
-                  else "#22c55e")
+    # ── session logging ─────────────────────────────────────────────────────
+    st.session_state.analysis_count += 1
+    if in_tremor_band:
+        st.session_state.tremor_count += 1
+
+    st.session_state.log_rows.append({
+        'timestamp'   : datetime.now().isoformat(timespec='seconds'),
+        'dom_freq_hz' : round(dom_f, 4),
+        'detected_bpm': detected_bpm,
+        'tremor_power': round(t_power, 6),
+        'severity'    : sev,
+        'signal_quality': sq,
+        'in_tremor_band': in_tremor_band,
+        'ml_prediction': pred_label,
+        'ml_confidence': round(pred_proba, 4),
+    })
+
+    # ════════════════════════════════════════════════════════════════════════
+    #  ROW 1  –  Raw signal  |  Preprocessing
+    # ════════════════════════════════════════════════════════════════════════
+    r1c1, r1c2 = st.columns(2)
+
+    with r1c1:
+        st.markdown("<div class='section-title'>① LIVE RAW TENG SIGNAL</div>", unsafe_allow_html=True)
+        st.plotly_chart(plot_raw_signal(raw_signal), use_container_width=True, config={'displayModeBar': False})
+
+    with r1c2:
+        st.markdown("<div class='section-title'>② SIGNAL PREPROCESSING PIPELINE</div>", unsafe_allow_html=True)
+        st.plotly_chart(plot_preprocessing_stages(win_raw), use_container_width=True, config={'displayModeBar': False})
+
+    # ════════════════════════════════════════════════════════════════════════
+    #  ROW 2  –  FFT  |  Welch PSD
+    # ════════════════════════════════════════════════════════════════════════
+    r2c1, r2c2 = st.columns(2)
+
+    with r2c1:
+        st.markdown("<div class='section-title'>③ FFT AMPLITUDE SPECTRUM</div>", unsafe_allow_html=True)
+        st.plotly_chart(plot_fft(freqs_f, amps_f), use_container_width=True, config={'displayModeBar': False})
+
+    with r2c2:
+        st.markdown("<div class='section-title'>④ WELCH POWER SPECTRAL DENSITY</div>", unsafe_allow_html=True)
+        st.plotly_chart(plot_psd(f_psd, psd_vals), use_container_width=True, config={'displayModeBar': False})
+
+    # ════════════════════════════════════════════════════════════════════════
+    #  ROW 3  –  Detection metrics  |  Alert  |  ML
+    # ════════════════════════════════════════════════════════════════════════
+    r3c1, r3c2, r3c3 = st.columns([2, 1.6, 1.4])
+
+    # ── (5) Detection panel ─────────────────────────────────────────────────
+    with r3c1:
+        st.markdown("<div class='section-title'>⑤ REAL-TIME DETECTION METRICS</div>", unsafe_allow_html=True)
+
+        sev_css = {'Mild':'sev-mild','Moderate':'sev-moderate','Severe':'sev-severe'}.get(sev, 'sev-mild')
+        sq_color = {'GOOD':'#33ee66','FAIR':'#ffcc33','POOR':'#ff4444'}.get(sq, '#ffffff')
+
         st.markdown(f"""
-        <div class="card" style="border-left:4px solid {colour};">
-          <div class="card-title">Diagnosis</div>
-          <div style="font-size:1.1rem;font-weight:700;color:{colour};">{label}</div>
-          <div style="font-size:0.84rem;color:#64748b;margin-top:6px;">
-            Confidence: <b>{conf}</b><br>
-            Tremor: {tf_c} Hz · {ta_c} g<br>
-            Model: RF / SVM / KNN ensemble
+        <div class='metric-row'>
+          <div class='metric-tile'>
+            <div class='label'>Dominant Freq</div>
+            <div class='value'>{dom_f:.2f}</div>
+            <div class='unit'>Hz</div>
           </div>
-        </div>""", unsafe_allow_html=True)
-    else:
-        st.info("Power on device to see classification.")
+          <div class='metric-tile'>
+            <div class='label'>Detected BPM</div>
+            <div class='value'>{detected_bpm}</div>
+            <div class='unit'>bpm</div>
+          </div>
+          <div class='metric-tile'>
+            <div class='label'>Tremor Power</div>
+            <div class='value'>{t_power:.4f}</div>
+            <div class='unit'>V²/Hz</div>
+          </div>
+          <div class='metric-tile'>
+            <div class='label'>Tremor Severity</div>
+            <div class='value {sev_css}' style='font-size:1.1rem;'>{sev}</div>
+          </div>
+          <div class='metric-tile'>
+            <div class='label'>Signal Quality</div>
+            <div class='value' style='color:{sq_color};font-size:1.1rem;'>{sq}</div>
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
 
-st.markdown("<hr style='margin:8px 0'>", unsafe_allow_html=True)
+    # ── (6) Alert box ────────────────────────────────────────────────────────
+    with r3c2:
+        st.markdown("<div class='section-title'>⑥ TREMOR ALERT SYSTEM</div>", unsafe_allow_html=True)
+        if in_tremor_band:
+            st.markdown(f"""
+            <div class='alert-tremor'>
+              <h2>⚠ TREMOR<br>DETECTED</h2>
+              <p>{dom_f:.2f} Hz — {detected_bpm} BPM<br>
+                 Severity: <span class='{sev_css}'>{sev}</span><br>
+                 Band: {TREMOR_LO}–{TREMOR_HI} Hz (Parkinsonian)
+              </p>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown(f"""
+            <div class='alert-normal'>
+              <h2>✔ NORMAL<br>SIGNAL</h2>
+              <p>{dom_f:.2f} Hz — {detected_bpm} BPM<br>
+                 Outside tremor band<br>
+                 ({TREMOR_LO}–{TREMOR_HI} Hz)
+              </p>
+            </div>
+            """, unsafe_allow_html=True)
 
+    # ── (7) ML prediction ────────────────────────────────────────────────────
+    with r3c3:
+        st.markdown("<div class='section-title'>⑦ ML CLASSIFICATION</div>", unsafe_allow_html=True)
+        bar_w = int(pred_proba * 100)
+        bar_c = '#00ffcc' if pred_proba > 0.7 else '#ffcc33' if pred_proba > 0.4 else '#ff4444'
+        st.markdown(f"""
+        <div class='pred-card'>
+          <div class='label'>MODEL</div>
+          <div style='color:#7898b8;font-size:0.8rem;margin-bottom:8px;'>{ml_model_name}</div>
+          <div class='label'>PREDICTION</div>
+          <div class='class-name'>{pred_label}</div>
+          <div class='conf'>Confidence: {pred_proba*100:.1f}%</div>
+          <div style='background:#0a1422;border-radius:4px;height:8px;margin-top:10px;'>
+            <div style='width:{bar_w}%;height:100%;background:{bar_c};border-radius:4px;
+                        transition:width 0.4s ease;'></div>
+          </div>
+          <div class='conf' style='margin-top:4px;'>
+            Freq detect: <span style='color:#00c8ff;'>{dom_f:.3f} Hz</span>
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
 
-# ─────────────────────────────────────────────
-# Row 3 — Charts
-# ─────────────────────────────────────────────
-st.markdown("### 📈 Live Monitoring Charts")
-chart_tabs = st.tabs(["📊 Vitals History", "〰️ Tremor Waveform",
-                       "🔬 FFT Spectrum",   "📋 Accelerometer"])
+    # ════════════════════════════════════════════════════════════════════════
+    #  ROW 4  –  Session statistics bar
+    # ════════════════════════════════════════════════════════════════════════
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown("<div class='section-title'>⑧ SESSION STATISTICS</div>", unsafe_allow_html=True)
 
-# ── Tab 0: Vitals history ──────────────────
-with chart_tabs[0]:
-    hist = st.session_state.history
-    if hist.empty:
-        st.info("No data yet — enable device and press Refresh.")
-    else:
-        fig, axes = plt.subplots(2, 2, figsize=(14, 5))
-        fig.patch.set_facecolor("#f8f9fc")
-        plots = [
-            ("heart_rate",       "Heart Rate (bpm)", "#e94560", (40, 160)),
-            ("temperature",      "Temperature (°C)", "#f59e0b", (35, 39)),
-            ("tremor_freq_hz",   "Tremor Freq (Hz)", "#7c3aed", (0,  8)),
-            ("tremor_amplitude", "Tremor Amp (g)",   "#0f3460", (0,  3)),
-        ]
-        for ax, (col, title, color, ylim) in zip(axes.flat, plots):
-            if col in hist.columns:
-                values = pd.to_numeric(hist[col], errors="coerce").dropna().values
-                if len(values):
-                    ax.plot(values, color=color, linewidth=1.8, alpha=0.9)
-                    ax.axhline(float(np.mean(values)), color=color,
-                               linestyle="--", alpha=0.4, linewidth=1)
-            ax.set_title(title, fontsize=10, fontweight="bold")
-            ax.set_ylim(float(ylim[0]), float(ylim[1]))
-            ax.set_facecolor("white")
-            ax.tick_params(labelsize=8)
-            ax.grid(True, alpha=0.3)
-        plt.tight_layout()
-        st.pyplot(fig)
-        plt.close(fig)
+    s1, s2, s3, s4, s5 = st.columns(5)
+    s1.metric("Total Analyses",    st.session_state.analysis_count)
+    s2.metric("Tremor Events",     st.session_state.tremor_count)
+    s3.metric("Dominant Freq",     f"{dom_f:.3f} Hz")
+    s4.metric("Tremor Band Power", f"{t_power:.4f} V²/Hz")
+    s5.metric("Model Confidence",  f"{pred_proba*100:.1f}%")
 
-# ── Tab 1: Tremor waveform ─────────────────
-with chart_tabs[1]:
-    tf_wave = safe_float(latest.get("tremor_freq_hz"), 4.5)
-    t_arr, sig = generate_tremor_signal(tf_wave)
-    fig2, ax2 = plt.subplots(figsize=(14, 3.5))
-    ax2.plot(t_arr, sig, color="#e94560", linewidth=1.2, alpha=0.85)
-    ax2.set_xlabel("Time (s)", fontsize=10)
-    ax2.set_ylabel("Amplitude (V)", fontsize=10)
-    ax2.set_title(
-        f"Simulated Tremor Waveform — {tf_wave:.2f} Hz  |  Severity: {severity}",
-        fontsize=11, fontweight="bold"
-    )
-    ax2.grid(True, alpha=0.3)
-    fig2.patch.set_facecolor("#f8f9fc")
-    plt.tight_layout()
-    st.pyplot(fig2)
-    plt.close(fig2)
-    st.caption("Waveform includes additive noise and baseline drift matching real sensor recordings.")
+    # ────────────────────────────────────────────────────────────────────────
+    #  Signal metadata (expandable)
+    # ────────────────────────────────────────────────────────────────────────
+    if records and data_source == "📁 READINGS.xlsx":
+        with st.expander("📋 Signal Record Details", expanded=False):
+            r = records[st.session_state.selected_rec]
+            st.json({
+                "BPM"          : r['bpm'],
+                "Frequency (Hz)": round(r['freq_hz'], 4),
+                "Set Index"    : r['set_idx'],
+                "Signal ID"    : r['signal_id'],
+                "Raw Samples"  : len(r['signal_raw']),
+                "Proc Samples" : len(r['signal_proc']),
+                "RMS (proc)"   : round(float(np.sqrt(np.mean(r['signal_proc']**2))), 6),
+            })
 
-# ── Tab 2: FFT Spectrum ────────────────────
-with chart_tabs[2]:
-    # safe_float ensures never None; np.clip ensures within xlim=[0,15]
-    tf_fft = float(np.clip(safe_float(latest.get("tremor_freq_hz"), 4.5), 0.01, 14.99))
-
-    _, sig_fft = generate_tremor_signal(tf_fft, duration_sec=10.0)
-    freqs, mags = compute_fft(sig_fft)
-
-    fig3, ax3 = plt.subplots(figsize=(14, 3.5))
-    ax3.plot(freqs, mags, color="#7c3aed", linewidth=1.5)
-    ax3.axvspan(4.0, 7.0, alpha=0.15, color="#ef4444",
-                label="Pathological range (4–7 Hz)")
-    # x= keyword + plain Python float avoids the Python 3.14 comparison bug
-    ax3.axvline(x=tf_fft, color="#ef4444", linestyle="--",
-                linewidth=1.5, label=f"Dominant: {tf_fft:.2f} Hz")
-    ax3.set_xlim(0.0, 15.0)
-    ax3.set_xlabel("Frequency (Hz)", fontsize=10)
-    ax3.set_ylabel("Magnitude",      fontsize=10)
-    ax3.set_title("FFT Spectrum — Tremor Frequency Analysis",
-                  fontsize=11, fontweight="bold")
-    ax3.legend(fontsize=9)
-    ax3.grid(True, alpha=0.3)
-    fig3.patch.set_facecolor("#f8f9fc")
-    plt.tight_layout()
-    st.pyplot(fig3)
-    plt.close(fig3)
-
-# ── Tab 3: Accelerometer ──────────────────
-with chart_tabs[3]:
-    hist = st.session_state.history
-    if hist.empty or "accel_x" not in hist.columns:
-        st.info("No accelerometer data yet.")
-    else:
-        fig4, axes4 = plt.subplots(1, 3, figsize=(14, 3.5))
-        for ax4, col, color in zip(axes4,
-                                   ["accel_x", "accel_y", "accel_z"],
-                                   ["#e94560",  "#22c55e", "#0f3460"]):
-            values4 = pd.to_numeric(hist[col], errors="coerce").dropna().values
-            if len(values4):
-                ax4.plot(values4, color=color, linewidth=1.4)
-            ax4.set_title(col.upper(), fontsize=10, fontweight="bold")
-            ax4.set_ylabel("Acceleration (g)" if col == "accel_x" else "")
-            ax4.grid(True, alpha=0.3)
-            ax4.set_facecolor("white")
-        fig4.suptitle("3-Axis Accelerometer", fontsize=11, fontweight="bold")
-        fig4.patch.set_facecolor("#f8f9fc")
-        plt.tight_layout()
-        st.pyplot(fig4)
-        plt.close(fig4)
-
-st.markdown("<hr style='margin:8px 0'>", unsafe_allow_html=True)
+else:
+    st.info("⏳ Waiting for signal data — check that READINGS.xlsx is in the working directory.")
 
 
-# ─────────────────────────────────────────────
-# Row 4 — Log table + Stats + Download
-# ─────────────────────────────────────────────
-log_col, stat_col = st.columns([2, 1])
-
-with log_col:
-    st.markdown("### 🗃️ Sensor Log (last 20 readings)")
-    hist = st.session_state.history
-    if not hist.empty:
-        display_cols = ["timestamp", "heart_rate", "temperature",
-                        "tremor_freq_hz", "tremor_amplitude", "spo2", "signal_quality"]
-        available = [c for c in display_cols if c in hist.columns]
-        st.dataframe(hist[available].tail(20).reset_index(drop=True),
-                     use_container_width=True, height=260)
-        csv_bytes = hist.to_csv(index=False).encode()
-        st.download_button(
-            label="⬇️ Download Full Report (CSV)",
-            data=csv_bytes,
-            file_name=f"parkinson_monitor_{datetime.date.today()}.csv",
-            mime="text/csv",
-        )
-    else:
-        st.info("No logged data yet.")
-
-with stat_col:
-    st.markdown("### 📊 Session Stats")
-    dur = (datetime.datetime.now() - st.session_state.session_start).seconds
-    mins, secs = divmod(dur, 60)
-    n  = len(st.session_state.history)
-    sq = latest.get("signal_quality")
-    gw = "🟢 Online" if st.session_state.device_on else "🔴 Offline"
-
-    st.metric("⏱️ Session Duration",   f"{mins}m {secs}s")
-    st.metric("📦 Readings Collected", n)
-    st.metric("🚨 Total Alerts Fired", st.session_state.total_alerts)
-    st.metric("📶 Gateway Status",     gw)
-    st.metric("⚡ Signal Quality",     f"{sq}%" if sq is not None else "—")
-
-
-# ─────────────────────────────────────────────
-# Refresh controls
-# ─────────────────────────────────────────────
-st.markdown("<hr style='margin:8px 0'>", unsafe_allow_html=True)
-btn_col, info_col = st.columns([1, 4])
-
-with btn_col:
-    if st.button("🔄 Refresh Reading", use_container_width=True):
-        take_reading()
-        st.rerun()
-
-with info_col:
-    if st.session_state.live_mode and st.session_state.device_on:
-        st.info(f"▶️ **Live mode ON** — auto-refreshing every {refresh_rate}s.")
-    elif st.session_state.live_mode and not st.session_state.device_on:
-        st.warning("Live mode is ON but device is OFF. Enable device in sidebar.")
-    else:
-        st.caption("Manual mode — click Refresh or enable Live Streaming in sidebar.")
-
-# Auto-refresh loop (live mode)
-if st.session_state.live_mode and st.session_state.device_on:
-    take_reading()
-    time.sleep(refresh_rate)
-    st.rerun()
+# ══════════════════════════════════════════════════════════════════════════════
+#  FOOTER
+# ══════════════════════════════════════════════════════════════════════════════
+st.markdown("""
+<div class='footer'>
+  IEEE RESEARCH PROTOTYPE  ·  TENG-BASED PARKINSON TREMOR DETECTION  ·  FFT / WELCH PSD ANALYSIS
+  <br>Sensor: Triboelectric Nanogenerator (TENG)  ·  Fs = 100 Hz  ·  Tremor Band: 3–7 Hz  ·  Butterworth BPF 0.5–10 Hz
+</div>
+""", unsafe_allow_html=True)
