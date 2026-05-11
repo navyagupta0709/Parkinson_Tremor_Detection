@@ -389,16 +389,73 @@ with st.sidebar:
 
     if use_serial:
         st.markdown(f"<div style='color:{C_MUTED};font-size:.7rem;text-transform:uppercase;margin-top:.6rem;margin-bottom:4px'>Serial Port</div>", unsafe_allow_html=True)
+
+        # ── Scan ports ──────────────────────────────────────────────────────
+        if "scanned_ports" not in S:
+            S["scanned_ports"] = []
+
+        scan_col, _ = st.columns([1, 0.01])
+        with scan_col:
+            if st.button("🔍  Scan Ports", use_container_width=True):
+                if SERIAL_OK:
+                    found = serial.tools.list_ports.comports()
+                    S["scanned_ports"] = [(p.device, p.description) for p in found]
+                else:
+                    S["scanned_ports"] = []
+
+        # Show scan results as a mini table
         if SERIAL_OK:
-            ports = [p.device for p in serial.tools.list_ports.comports()]
+            live_ports = serial.tools.list_ports.comports()
+            port_map   = {p.device: p.description for p in live_ports}
         else:
-            ports = []
-        manual = st.text_input("Manual override", value="COM3",
-                               label_visibility="collapsed",
-                               placeholder="e.g. COM3 or /dev/ttyUSB0")
-        all_ports = sorted(set(ports + [manual]))
-        sel_port  = st.selectbox("Port", all_ports, label_visibility="collapsed")
-        baud      = st.selectbox("Baud Rate", [9600, 115200], index=0)
+            port_map = {}
+
+        all_found = list(port_map.keys())
+
+        if all_found:
+            rows = ""
+            for dev, desc in port_map.items():
+                is_arduino = any(k in desc.lower() for k in
+                                 ["arduino", "ch340", "ch341", "cp210", "ftdi", "usb serial"])
+                badge = (f"<span style='color:{C_GREEN};font-size:.65rem'>● Arduino</span>"
+                         if is_arduino
+                         else f"<span style='color:{C_MUTED};font-size:.65rem'>○ Serial</span>")
+                rows += (f"<tr>"
+                         f"<td style='color:{C_ACCENT};padding:2px 6px'>{dev}</td>"
+                         f"<td style='color:{C_MUTED};padding:2px 4px;font-size:.68rem'>{desc[:28]}</td>"
+                         f"<td style='padding:2px 4px'>{badge}</td>"
+                         f"</tr>")
+            st.markdown(f"""
+<div style='background:{C_PANEL};border:1px solid {C_BORDER};border-radius:8px;
+     padding:.5rem .7rem;margin-bottom:.4rem'>
+<table style='width:100%;border-collapse:collapse;font-size:.72rem'>{rows}</table>
+</div>""", unsafe_allow_html=True)
+        else:
+            st.markdown(f"""
+<div style='background:{C_PANEL};border:1px solid {C_BORDER};border-radius:8px;
+     padding:.45rem .7rem;margin-bottom:.4rem;font-size:.72rem;color:{C_MUTED}'>
+  No ports detected. Press <b style='color:{C_ACCENT}'>Scan Ports</b> or type manually below.
+</div>""", unsafe_allow_html=True)
+
+        # Manual override + dropdown
+        manual = st.text_input("Type port manually",
+                               placeholder="e.g. COM4  or  /dev/ttyUSB0",
+                               label_visibility="visible")
+        dropdown_options = sorted(set(all_found + ([manual] if manual.strip() else [])))
+        if not dropdown_options:
+            dropdown_options = ["COM3"]
+        sel_port = st.selectbox("Select Port", dropdown_options,
+                                label_visibility="visible")
+        baud = st.selectbox("Baud Rate", [9600, 115200], index=0)
+
+        # Tip box
+        st.markdown(f"""
+<div style='background:rgba(79,156,249,.06);border:1px solid {C_BORDER};
+     border-radius:8px;padding:.45rem .7rem;font-size:.68rem;color:{C_MUTED};margin-top:.3rem'>
+  💡 <b style='color:{C_TEXT}'>How to find your Arduino port:</b><br>
+  <b>Windows:</b> Device Manager → Ports (COM &amp; LPT)<br>
+  <b>Linux/Mac:</b> <code style='color:{C_ACCENT}'>ls /dev/tty*</code>
+</div>""", unsafe_allow_html=True)
     else:
         st.markdown(f"""
 <div style='background:rgba(79,156,249,.07);border:1px solid {C_BORDER};
