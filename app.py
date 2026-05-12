@@ -391,39 +391,46 @@ def _render_sidebar():
             "**IEEE IoT Healthcare System**\n\n"
             "TENG Wearable · Arduino UNO · ML"
         )
+
         st.markdown("---")
 
         # ── Port detection ────────────────────────────────────────
-        # ── Port detection ────────────────────────────────────────
-st.subheader("⚙️ Serial Connection")
+        st.subheader("⚙️ Serial Connection")
 
-auto_ports = list_arduino_ports()
-port_opts  = (auto_ports if auto_ports else []) + ["Manual…", "Demo Mode"]
+        auto_ports = list_arduino_ports()
+        port_opts  = (auto_ports if auto_ports else []) + ["Manual…", "Demo Mode"]
 
-default_index = 0
+        default_index = 0
 
-if not auto_ports and len(port_opts) > 1:
-    default_index = len(port_opts) - 1
+        if not auto_ports and len(port_opts) > 1:
+            default_index = len(port_opts) - 1
 
-sel = st.selectbox(
-    "COM Port",
-    port_opts,
-    index=default_index
-)
+        sel = st.selectbox(
+            "COM Port",
+            port_opts,
+            index=default_index
+        )
 
         # ── Start / Stop ──────────────────────────────────────────
-
         st.markdown("")
-        col_a, col_b = st.columns(2)
-        with col_a:
-            if st.button("▶ START", use_container_width=True,
-                         disabled=st.session_state.monitoring):
-                _start_monitoring(sel)
-        with col_b:
-            if st.button("⏹ STOP", use_container_width=True,
-                         disabled=not st.session_state.monitoring):
-                _stop_monitoring()
 
+        col_a, col_b = st.columns(2)
+
+        with col_a:
+            if st.button(
+                "▶ START",
+                use_container_width=True,
+                disabled=st.session_state.monitoring
+            ):
+                _start_monitoring(sel)
+
+        with col_b:
+            if st.button(
+                "⏹ STOP",
+                use_container_width=True,
+                disabled=not st.session_state.monitoring
+            ):
+                _stop_monitoring()
         # ── Connection status ─────────────────────────────────────
         st.markdown("---")
         st.subheader("📡 Connection")
