@@ -1,33 +1,33 @@
-# =========================
+# =========================================
 # sender.py
-# =========================
+# REAL LIVE ARDUINO STREAM
+# =========================================
 
 import serial
 import json
 import numpy as np
-import scipy.signal as scipy_signal
 from scipy.fft import fft, fftfreq
+import scipy.signal as scipy_signal
 import paho.mqtt.client as mqtt
-import time
 
-# ---------------------------------------------------
-# SERIAL CONFIG
-# ---------------------------------------------------
+# =========================================
+# SERIAL
+# =========================================
 
 SERIAL_PORT = "COM3"
 BAUD_RATE = 9600
 
-# ---------------------------------------------------
-# MQTT CONFIG
-# ---------------------------------------------------
+# =========================================
+# MQTT
+# =========================================
 
 BROKER = "broker.hivemq.com"
 PORT = 1883
-MQTT_TOPIC = "tremorwatch/data/navya"
+TOPIC = "teng/live/navya"
 
-# ---------------------------------------------------
+# =========================================
 # CONNECT SERIAL
-# ---------------------------------------------------
+# =========================================
 
 ser = serial.Serial(
     SERIAL_PORT,
@@ -35,9 +35,9 @@ ser = serial.Serial(
     timeout=1
 )
 
-# ---------------------------------------------------
-# MQTT
-# ---------------------------------------------------
+# =========================================
+# MQTT CLIENT
+# =========================================
 
 client = mqtt.Client()
 
@@ -49,9 +49,9 @@ client.connect(
 
 client.loop_start()
 
-# ---------------------------------------------------
+# =========================================
 # PARAMETERS
-# ---------------------------------------------------
+# =========================================
 
 FS = 100
 
@@ -59,15 +59,17 @@ buffer = []
 
 print("Reading Arduino Data...")
 
-# ---------------------------------------------------
+# =========================================
 # LOOP
-# ---------------------------------------------------
+# =========================================
 
 while True:
 
     try:
 
         line = ser.readline().decode().strip()
+
+        print(line)
 
         if not line:
             continue
@@ -83,18 +85,18 @@ while True:
 
         buffer.append(voltage)
 
-        if len(buffer) > 500:
+        if len(buffer) > 256:
             buffer.pop(0)
 
         freq = 0.0
         power = 0.0
         tremor = False
 
-        # ---------------------------------------------------
+        # =========================================
         # FFT
-        # ---------------------------------------------------
+        # =========================================
 
-        if len(buffer) >= 256:
+        if len(buffer) >= 128:
 
             sig = np.array(buffer)
 
@@ -128,22 +130,25 @@ while True:
 
             freqs = freqs[mask]
 
-            amps = (2/n) * np.abs(
+            amps = np.abs(
                 fft_vals[mask]
             )
 
-            idx = np.argmax(amps)
+            idx = np.argmax(
+                amps
+            )
 
-            freq = float(freqs[idx])
+            freq = float(
+                freqs[idx]
+            )
 
-            power = float(np.max(amps))
+            power = float(
+                amps[idx]
+            )
 
             if 3 <= freq <= 7:
-                tremor = True
 
-        # ---------------------------------------------------
-        # MQTT PAYLOAD
-        # ---------------------------------------------------
+                tremor = True
 
         payload = {
 
@@ -155,14 +160,10 @@ while True:
         }
 
         client.publish(
-            MQTT_TOPIC,
+            TOPIC,
             json.dumps(payload)
         )
-
-        print(payload)
 
     except Exception as e:
 
         print(e)
-
-        time.sleep(1)
