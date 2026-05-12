@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Tremor Detection Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Syne:wght@400;600;800&display=swap" rel="stylesheet"/>
+<style>
+  :root {
+    --bg:         #0b0d14;
+    --panel:      #12151f;
+    --panel2:     #1a1e2e;
+    --border:     #252a3d;
+    --accent:     #4f8fff;
+    --accent2:    #7c5cff;
+    --green:      #22d47a;
+    --red:        #ff3b3b;
+    --orange:     #ff8c00;
+    --text:       #e2e8f8;
+    --muted:      #6b7594;
+    --font-body:  'Syne', sans-serif;
+    --font-mono:  'JetBrains Mono', monospace;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: var(--font-body);
+         min-height: 100vh; overflow-x: hidden; }
+
+  /* ── Header ── */
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 18px 32px; border-bottom: 1px solid var(--border);
+    background: var(--panel);
+    position: sticky; top: 0; z-index: 100;
+  }
+  .logo { display: flex; align-items: center; gap: 12px; }
+  .logo-icon { width: 36px; height: 36px; position: relative; }
+  .logo-icon svg { width: 36px; height: 36px; }
+  .logo-text { font-size: 1.3rem; font-weight: 800; letter-spacing: -0.5px; }
+  .logo-text span { color: var(--accent); }
+  .header-right { display: flex; align-items: center; gap: 16px; }
+  .btn {
+    padding: 8px 18px; border-radius: 8px; border: none; cursor: pointer;
+    font-family: var(--font-body); font-weight: 600; font-size: 0.9rem;
+    transition: all .2s;
+  }
+  .btn-outline {
+    background: transparent; border: 1.5px solid var(--border);
+    color: var(--text);
+  }
+  .btn-outline:hover { border-color: var(--accent); color: var(--accent); }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary:hover { background: #3a76f0; transform: translateY(-1px); }
+  .btn-danger { background: var(--red); color: #fff; }
+  .btn-danger:hover { background: #e02020; }
+
+  /* ── Alert Banner ── */
+  #alert-banner {
+    display: none;
+    background: var(--red);
+    color: #fff;
+    text-align: center;
+    padding: 14px;
+    font-weight: 800;
+    font-size: 1.1rem;
+    letter-spacing: 2px;
+    animation: pulse-bg 1s ease-in-out infinite alternate;
+    position: relative;
+    overflow: hidden;
+  }
+  #alert-banner::before {
+    content: '';
+    position: absolute; inset: 0;
+    background: repeating-linear-gradient(
+      90deg,
+      transparent, transparent 20px,
+      rgba(255,255,255,.06) 20px, rgba(255,255,255,.06) 21px
+    );
+  }
+  @keyframes pulse-bg {
+    from { background: #ff2020; }
+    to   { background: #cc0000; }
+  }
+
+  /* ── Layout ── */
+  main { padding: 28px 32px; display: grid; gap: 24px; }
+
+  /* ── Status Cards ── */
+  .cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 16px;
+  }
+  .card {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 14px; padding: 20px 22px;
+    display: flex; flex-direction: column; gap: 8px;
+    transition: border-color .2s;
+  }
+  .card:hover { border-color: var(--accent2); }
+  .card-label { font-size: 0.75rem; color: var(--muted); text-transform: uppercase;
+                letter-spacing: 1.5px; font-weight: 600; }
+  .card-value { font-size: 1.9rem; font-weight: 800; font-family: var(--font-mono);
+                line-height: 1; }
+  .card-unit  { font-size: 0.78rem; color: var(--muted); }
+  .card.green .card-value { color: var(--green); }
+  .card.red   .card-value { color: var(--red);   }
+  .card.blue  .card-value { color: var(--accent); }
+  .card.orange .card-value { color: var(--orange); }
+
+  /* Connection dot */
+  .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+  .dot.connected    { background: var(--green); box-shadow: 0 0 8px var(--green); }
+  .dot.disconnected { background: var(--red);   box-shadow: 0 0 8px var(--red); }
+
+  /* ── Waveform ── */
+  .chart-panel {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 14px; padding: 24px;
+  }
+  .chart-title {
+    font-size: 1rem; font-weight: 700; margin-bottom: 18px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .chart-title .badge {
+    font-size: 0.72rem; padding: 3px 10px; border-radius: 20px;
+    background: var(--panel2); color: var(--muted); font-family: var(--font-mono);
+  }
+  canvas { max-height: 260px; }
+
+  /* ── Bottom row ── */
+  .bottom-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+  }
+  @media (max-width: 900px) { .bottom-grid { grid-template-columns: 1fr; } }
+
+  /* ── Event Log ── */
+  .log-panel {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 14px; padding: 24px;
+    display: flex; flex-direction: column; gap: 14px;
+  }
+  .log-title {
+    font-size: 1rem; font-weight: 700;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .log-scroll { max-height: 260px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+  .log-item {
+    background: var(--panel2); border: 1px solid var(--border);
+    border-radius: 10px; padding: 12px 14px;
+    display: grid; grid-template-columns: 2rem 1fr 1fr 1fr;
+    gap: 8px; align-items: center; font-size: 0.82rem;
+  }
+  .log-id { color: var(--muted); font-family: var(--font-mono); }
+  .sev-severe   { color: var(--red);    font-weight: 700; }
+  .sev-moderate { color: var(--orange); font-weight: 700; }
+  .sev-mild     { color: #ffdd00;       font-weight: 700; }
+  .sev-trace    { color: var(--green);  font-weight: 700; }
+  .log-empty { color: var(--muted); font-size: 0.9rem; text-align: center; padding: 30px; }
+
+  /* ── FFT Info ── */
+  .fft-panel {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 14px; padding: 24px;
+    display: flex; flex-direction: column; gap: 14px;
+  }
+  .fft-title { font-size: 1rem; font-weight: 700; }
+  .meter-row { display: flex; flex-direction: column; gap: 6px; }
+  .meter-label { font-size: 0.8rem; color: var(--muted); display: flex; justify-content: space-between; }
+  .meter-bar { height: 10px; background: var(--border); border-radius: 6px; overflow: hidden; }
+  .meter-fill { height: 100%; border-radius: 6px; transition: width .3s ease;
+                background: linear-gradient(90deg, var(--accent), var(--accent2)); }
+  .meter-fill.danger { background: linear-gradient(90deg, var(--orange), var(--red)); }
+
+  .freq-visual {
+    margin-top: 8px; display: flex; align-items: flex-end; gap: 3px;
+    height: 80px; justify-content: center;
+  }
+  .freq-bar {
+    flex: 1; border-radius: 3px 3px 0 0;
+    background: var(--accent2); opacity: .7;
+    transition: height .15s ease, background .2s;
+  }
+  .freq-bar.tremor { background: var(--red); opacity: 1; }
+
+  /* ── Footer ── */
+  footer {
+    text-align: center; padding: 16px;
+    color: var(--muted); font-size: 0.78rem;
+    border-top: 1px solid var(--border);
+  }
+  footer span { color: var(--accent); }
+
+  /* scrollbar */
+  ::-webkit-scrollbar { width: 5px; }
+  ::-webkit-scrollbar-track { background: var(--panel); }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 10px; }
+</style>
+</head>
+<body>
+
+<!-- ═══ Header ═══ -->
+<header>
+  <div class="logo">
+    <div class="logo-icon">
+      <svg viewBox="0 0 36 36" fill="none">
+        <circle cx="18" cy="18" r="17" stroke="#4f8fff" stroke-width="1.5"/>
+        <polyline points="4,18 9,12 13,22 17,10 21,24 25,14 29,18 32,18"
+                  stroke="#4f8fff" stroke-width="2" fill="none" stroke-linecap="round"/>
+        <circle cx="18" cy="18" r="3" fill="#7c5cff"/>
+      </svg>
+    </div>
+    <div class="logo-text">Tremor<span>Watch</span></div>
+  </div>
+  <div class="header-right">
+    <div id="conn-status" style="font-size:.85rem; display:flex; align-items:center;">
+      <span class="dot disconnected" id="conn-dot"></span>
+      <span id="conn-text">Connecting…</span>
+    </div>
+    <button class="btn btn-outline" onclick="clearEvents()">Clear Log</button>
+    <button class="btn btn-primary" onclick="downloadReport()">⬇ Download Report</button>
+  </div>
+</header>
+
+<!-- ═══ Alert Banner ═══ -->
+<div id="alert-banner">⚠ TREMOR DETECTED — ALERT ACTIVE ⚠</div>
+
+<!-- ═══ Main ═══ -->
+<main>
+
+  <!-- Status Cards -->
+  <div class="cards">
+    <div class="card blue">
+      <div class="card-label">Voltage (Live)</div>
+      <div class="card-value" id="c-voltage">—</div>
+      <div class="card-unit">Volts</div>
+    </div>
+    <div class="card green">
+      <div class="card-label">Status</div>
+      <div class="card-value" id="c-status" style="font-size:1.1rem; padding-top:6px;">Normal</div>
+      <div class="card-unit" id="c-sub">No tremor detected</div>
+    </div>
+    <div class="card orange">
+      <div class="card-label">Dominant Freq</div>
+      <div class="card-value" id="c-freq">—</div>
+      <div class="card-unit">Hz</div>
+    </div>
+    <div class="card blue">
+      <div class="card-label">Band Power</div>
+      <div class="card-value" id="c-power">—</div>
+      <div class="card-unit">3–12 Hz relative</div>
+    </div>
+    <div class="card red">
+      <div class="card-label">Total Events</div>
+      <div class="card-value" id="c-events">0</div>
+      <div class="card-unit">this session</div>
+    </div>
+    <div class="card blue">
+      <div class="card-label">Session Start</div>
+      <div class="card-value" id="c-session" style="font-size:.9rem; padding-top:8px;">—</div>
+      <div class="card-unit">&nbsp;</div>
+    </div>
+  </div>
+
+  <!-- Waveform -->
+  <div class="chart-panel">
+    <div class="chart-title">
+      Live Waveform
+      <span class="badge" id="sample-rate-badge">100 Hz · 5V ref</span>
+    </div>
+    <canvas id="waveChart"></canvas>
+  </div>
+
+  <!-- Bottom row -->
+  <div class="bottom-grid">
+
+    <!-- FFT / Frequency meter -->
+    <div class="fft-panel">
+      <div class="fft-title">Frequency Analysis</div>
+      <div class="meter-row">
+        <div class="meter-label"><span>Band Power (3–12 Hz)</span><span id="bp-pct">0%</span></div>
+        <div class="meter-bar"><div class="meter-fill" id="bp-bar" style="width:0%"></div></div>
+      </div>
+      <div class="meter-row">
+        <div class="meter-label"><span>Dominant Frequency</span><span id="df-val">0 Hz</span></div>
+        <div class="meter-bar"><div class="meter-fill" id="df-bar" style="width:0%"></div></div>
+      </div>
+      <div class="freq-visual" id="freq-bars"></div>
+      <div style="font-size:.78rem; color:var(--muted); text-align:center; margin-top:4px;">
+        Tremor zone: 3–12 Hz &nbsp;|&nbsp; Bars = frequency buckets
+      </div>
+    </div>
+
+    <!-- Event Log -->
+    <div class="log-panel">
+      <div class="log-title">
+        Tremor Event Log
+        <span style="font-size:.8rem; color:var(--muted); font-family:var(--font-mono)" id="ev-count">0 events</span>
+      </div>
+      <div class="log-scroll" id="event-log">
+        <div class="log-empty" id="log-empty">No tremor events recorded yet.</div>
+      </div>
+    </div>
+
+  </div>
+</main>
+
+<footer>
+  TremorWatch &nbsp;·&nbsp; Arduino @ <span id="port-name">—</span> &nbsp;·&nbsp;
+  Built for wearable tremor monitoring
+</footer>
+
+<script>
+// ── Chart setup ──────────────────────────────────────────────────
+const MAX_POINTS = 300;
+const ctx = document.getElementById('waveChart').getContext('2d');
+const waveData = {
+  labels: [],
+  datasets: [{
+    label: 'Voltage (V)',
+    data: [],
+    borderColor: '#4f8fff',
+    backgroundColor: 'rgba(79,143,255,.08)',
+    borderWidth: 1.8,
+    pointRadius: 0,
+    tension: 0.3,
+    fill: true,
+  }]
+};
+const waveChart = new Chart(ctx, {
+  type: 'line',
+  data: waveData,
+  options: {
+    animation: false,
+    responsive: true,
+    maintainAspectRatio: true,
+    plugins: { legend: { display: false } },
+    scales: {
+      x: {
+        ticks: { color: '#6b7594', maxTicksLimit: 8, font: { family: 'JetBrains Mono', size: 10 } },
+        grid:  { color: '#1a1e2e' },
+      },
+      y: {
+        min: 0, max: 5,
+        ticks: { color: '#6b7594', font: { family: 'JetBrains Mono', size: 10 },
+                 callback: v => v.toFixed(1) + 'V' },
+        grid: { color: '#1a1e2e' },
+      }
+    }
+  }
+});
+
+// ── Freq bars visual (16 buckets) ────────────────────────────────
+const freqContainer = document.getElementById('freq-bars');
+const NUM_BUCKETS = 16;
+const freqBars = [];
+const freqLabels = [];
+// Bucket centers: 0–25 Hz range
+for (let i = 0; i < NUM_BUCKETS; i++) {
+  const f = (i + 1) * (25 / NUM_BUCKETS);
+  freqLabels.push(f);
+  const b = document.createElement('div');
+  b.className = 'freq-bar';
+  b.style.height = '5px';
+  b.title = f.toFixed(1) + ' Hz';
+  freqContainer.appendChild(b);
+  freqBars.push(b);
+}
+
+function isTremorBucket(f) { return f >= 3 && f <= 12; }
+
+// ── State ────────────────────────────────────────────────────────
+let prevTremor = false;
+let knownEvents = [];
+
+// ── Fetch waveform ───────────────────────────────────────────────
+async function fetchWaveform() {
+  try {
+    const r = await fetch('/api/waveform?n=300');
+    const d = await r.json();
+    if (!d.time || !d.voltage) return;
+
+    waveData.labels   = d.time.map(t => t.toFixed(2) + 's');
+    waveData.datasets[0].data = d.voltage;
+
+    // Color waveform red during tremor
+    if (prevTremor) {
+      waveData.datasets[0].borderColor = '#ff3b3b';
+      waveData.datasets[0].backgroundColor = 'rgba(255,59,59,.10)';
+    } else {
+      waveData.datasets[0].borderColor = '#4f8fff';
+      waveData.datasets[0].backgroundColor = 'rgba(79,143,255,.08)';
+    }
+    waveChart.update('none');
+
+    // Approximate FFT buckets from last 100 samples
+    updateFreqBars(d.voltage.slice(-100));
+  } catch(e) {}
+}
+
+function updateFreqBars(voltages) {
+  if (!voltages || voltages.length < 16) return;
+  // Simple DFT-like estimate per bucket
+  const n = voltages.length;
+  const mean = voltages.reduce((a,b)=>a+b,0)/n;
+  const centered = voltages.map(v => v - mean);
+  const maxH = 75;
+
+  freqBars.forEach((bar, i) => {
+    const f = freqLabels[i];
+    const omega = 2 * Math.PI * f / 100; // 100 Hz
+    let re = 0, im = 0;
+    for (let k = 0; k < n; k++) {
+      re += centered[k] * Math.cos(omega * k);
+      im += centered[k] * Math.sin(omega * k);
+    }
+    const mag = Math.sqrt(re*re + im*im) / n;
+    const h = Math.min(maxH, mag * maxH * 4);
+    bar.style.height = Math.max(3, h) + 'px';
+    bar.className = 'freq-bar' + (isTremorBucket(f) && prevTremor ? ' tremor' : '');
+  });
+}
+
+// ── Fetch status ─────────────────────────────────────────────────
+async function fetchStatus() {
+  try {
+    const r = await fetch('/api/status');
+    const s = await r.json();
+
+    // Connection
+    const dot  = document.getElementById('conn-dot');
+    const ctxt = document.getElementById('conn-text');
+    if (s.connected) {
+      dot.className  = 'dot connected';
+      ctxt.textContent = s.port || 'Connected';
+      document.getElementById('port-name').textContent = s.port || '—';
+    } else {
+      dot.className  = 'dot disconnected';
+      ctxt.textContent = 'Disconnected';
+    }
+
+    // Cards
+    document.getElementById('c-voltage').textContent = s.last_voltage.toFixed(3);
+    document.getElementById('c-freq').textContent    = s.dominant_freq.toFixed(2);
+    document.getElementById('c-power').textContent   = s.band_power.toFixed(4);
+    document.getElementById('c-events').textContent  = s.total_events;
+    document.getElementById('c-session').textContent = s.session_start.slice(11,19);
+
+    // Alert
+    const banner = document.getElementById('alert-banner');
+    const statusCard = document.getElementById('c-status');
+    const statusSub  = document.getElementById('c-sub');
+
+    prevTremor = s.tremor_active;
+
+    if (s.tremor_active) {
+      banner.style.display = 'block';
+      document.body.style.outline = '4px solid var(--red)';
+      statusCard.textContent = '🔴 TREMOR';
+      statusCard.style.color = 'var(--red)';
+      statusSub.textContent  = `Freq: ${s.dominant_freq} Hz`;
+    } else {
+      banner.style.display = 'none';
+      document.body.style.outline = 'none';
+      statusCard.textContent = '🟢 Normal';
+      statusCard.style.color = 'var(--green)';
+      statusSub.textContent  = 'No tremor detected';
+    }
+
+    // FFT meters
+    const bp = Math.min(1, s.band_power / 0.4) * 100;
+    document.getElementById('bp-pct').textContent = (s.band_power * 100).toFixed(1) + '%';
+    const bpBar = document.getElementById('bp-bar');
+    bpBar.style.width = bp + '%';
+    bpBar.className = 'meter-fill' + (s.tremor_active ? ' danger' : '');
+
+    const dfPct = Math.min(100, (s.dominant_freq / 20) * 100);
+    document.getElementById('df-val').textContent = s.dominant_freq + ' Hz';
+    document.getElementById('df-bar').style.width = dfPct + '%';
+
+  } catch(e) {}
+}
+
+// ── Fetch events ─────────────────────────────────────────────────
+async function fetchEvents() {
+  try {
+    const r = await fetch('/api/events');
+    const events = await r.json();
+    if (events.length === knownEvents.length) return;
+    knownEvents = events;
+
+    const log = document.getElementById('event-log');
+    const empty = document.getElementById('log-empty');
+    document.getElementById('ev-count').textContent = events.length + ' events';
+
+    if (events.length === 0) {
+      empty.style.display = 'block';
+      const old = log.querySelectorAll('.log-item');
+      old.forEach(e => e.remove());
+      return;
+    }
+    empty.style.display = 'none';
+
+    // Re-render all events
+    const old = log.querySelectorAll('.log-item');
+    old.forEach(e => e.remove());
+    [...events].reverse().forEach(ev => {
+      const div = document.createElement('div');
+      div.className = 'log-item';
+      const sev = ev.severity.toLowerCase();
+      div.innerHTML = `
+        <span class="log-id">#${ev.id}</span>
+        <span style="color:var(--text)">${ev.start}</span>
+        <span style="color:var(--muted)">${ev.duration}s · ${ev.freq}Hz</span>
+        <span class="sev-${sev}">${ev.severity}</span>
+      `;
+      log.insertBefore(div, log.firstChild);
+    });
+  } catch(e) {}
+}
+
+// ── Actions ──────────────────────────────────────────────────────
+async function clearEvents() {
+  await fetch('/api/clear_events', { method: 'POST' });
+  knownEvents = [];
+  fetchEvents();
+}
+
+function downloadReport() {
+  window.open('/api/report', '_blank');
+}
+
+// ── Poll loop ────────────────────────────────────────────────────
+function tick() {
+  fetchStatus();
+  fetchWaveform();
+}
+setInterval(tick,    100);   // waveform + status @ 10 fps
+setInterval(fetchEvents, 500); // events @ 2 fps
+tick();
+fetchEvents();
+</script>
+</body>
+</html>
