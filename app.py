@@ -1,18 +1,19 @@
-# ================================
+# =========================================
 # app.py
-# REAL LIVE TENG FFT DASHBOARD
-# ================================
+# REAL TENG FFT STREAMLIT DASHBOARD
+# =========================================
 
 import streamlit as st
 import numpy as np
-import plotly.graph_objects as go
-import paho.mqtt.client as mqtt
-import json
-from collections import deque
+import matplotlib.pyplot as plt
+import scipy.signal as scipy_signal
+from scipy.fft import fft, fftfreq
+import serial
+import threading
 import time
 
 # =========================================
-# PAGE
+# PAGE CONFIG
 # =========================================
 
 st.set_page_config(
@@ -22,93 +23,129 @@ st.set_page_config(
 )
 
 # =========================================
+# CUSTOM CSS
+# =========================================
+
+st.markdown("""
+<style>
+
+body {
+    background-color:#020617;
+}
+
+.big-alert {
+    background:#7f1d1d;
+    border:4px solid red;
+    padding:25px;
+    border-radius:15px;
+    text-align:center;
+    margin-top:20px;
+}
+
+.ok-box {
+    background:#052e16;
+    border:3px solid #22c55e;
+    padding:20px;
+    border-radius:15px;
+    text-align:center;
+    margin-top:20px;
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+# =========================================
+# PARAMETERS
+# =========================================
+
+SERIAL_PORT = "COM3"
+BAUD_RATE = 9600
+FS = 100
+
+# =========================================
 # SESSION STATE
 # =========================================
 
+if "signal" not in st.session_state:
+    st.session_state.signal = []
+
 if "times" not in st.session_state:
-    st.session_state.times = deque(maxlen=500)
-
-if "voltages" not in st.session_state:
-    st.session_state.voltages = deque(maxlen=500)
-
-if "freq" not in st.session_state:
-    st.session_state.freq = 0.0
-
-if "power" not in st.session_state:
-    st.session_state.power = 0.0
-
-if "tremor" not in st.session_state:
-    st.session_state.tremor = False
+    st.session_state.times = []
 
 if "connected" not in st.session_state:
     st.session_state.connected = False
 
-# =========================================
-# MQTT
-# =========================================
-
-BROKER = "broker.hivemq.com"
-PORT = 1883
-TOPIC = "teng/live/navya"
+if "thread_started" not in st.session_state:
+    st.session_state.thread_started = False
 
 # =========================================
-# CALLBACK
+# SERIAL READER
 # =========================================
 
-def on_message(client, userdata, msg):
+def serial_worker():
 
     try:
 
-        d = json.loads(
-            msg.payload.decode()
+        ser = serial.Serial(
+            SERIAL_PORT,
+            BAUD_RATE,
+            timeout=1
         )
-
-        st.session_state.times.append(
-            d["time"]
-        )
-
-        st.session_state.voltages.append(
-            d["voltage"]
-        )
-
-        st.session_state.freq = d["freq"]
-
-        st.session_state.power = d["power"]
-
-        st.session_state.tremor = d["tremor"]
 
         st.session_state.connected = True
 
+        while True:
+
+            try:
+
+                line = ser.readline().decode().strip()
+
+                if not line:
+                    continue
+
+                parts = line.split(",")
+
+                if len(parts) != 2:
+                    continue
+
+                t_sec = float(parts[0])
+
+                voltage = float(parts[1])
+
+                st.session_state.times.append(
+                    t_sec
+                )
+
+                st.session_state.signal.append(
+                    voltage
+                )
+
+                if len(st.session_state.signal) > 500:
+
+                    st.session_state.signal.pop(0)
+                    st.session_state.times.pop(0)
+
+            except:
+                pass
+
     except:
-        pass
+
+        st.session_state.connected = False
 
 # =========================================
-# MQTT CLIENT
+# START THREAD
 # =========================================
 
-client = mqtt.Client()
+if not st.session_state.thread_started:
 
-client.on_message = on_message
-
-try:
-
-    client.connect(
-        BROKER,
-        PORT,
-        60
+    thread = threading.Thread(
+        target=serial_worker,
+        daemon=True
     )
 
-    client.subscribe(
-        TOPIC
-    )
+    thread.start()
 
-    client.loop_start()
-
-except:
-
-    st.error(
-        "MQTT connection failed"
-    )
+    st.session_state.thread_started = True
 
 # =========================================
 # HEADER
@@ -139,30 +176,116 @@ else:
     )
 
 # =========================================
+# GET SIGNAL
+# =========================================
+
+sig = np.array(
+    st.session_state.signal
+)
+
+t = np.array(
+    st.session_state.times
+)
+
+# =========================================
+# SIGNAL PROCESSING
+# =========================================
+
+freq = 0.0
+power = 0.0
+
+if len(sig) >= 128:
+
+    sig = np.nan_to_num(sig)
+
+    sig = sig - np.mean(sig)
+
+    sig = scipy_signal.detrend(sig)
+
+    b, a = scipy_signal.butter(
+        4,
+        [0.5, 10],
+        btype='bandpass',
+        fs=FS
+    )
+
+    sig = scipy_signal.filtfilt(
+        b,
+        a,
+        sig
+    )
+
+    sig = scipy_signal.savgol_filter(
+        sig,
+        11,
+        2
+    )
+
+    # =========================================
+    # FFT
+    # =========================================
+
+    n = len(sig)
+
+    fft_vals = fft(sig)
+
+    freqs = fftfreq(
+        n,
+        d=1/FS
+    )
+
+    mask = freqs > 0
+
+    freqs = freqs[mask]
+
+    amps = (2/n) * np.abs(
+        fft_vals[mask]
+    )
+
+    idx = np.argmax(
+        amps
+    )
+
+    freq = float(
+        freqs[idx]
+    )
+
+    power = float(
+        amps[idx]
+    )
+
+# =========================================
 # ALERT SYSTEM
 # =========================================
 
-freq = st.session_state.freq
-
 if 3 <= freq <= 7:
 
+    if freq < 4:
+
+        severity = "MILD"
+
+    elif freq < 5.5:
+
+        severity = "MODERATE"
+
+    else:
+
+        severity = "SEVERE"
+
     st.markdown(f"""
-    <div style="
-        background:#7f1d1d;
-        padding:30px;
-        border-radius:15px;
-        border:4px solid red;
-        text-align:center;
-        animation: blinker 1s linear infinite;
-    ">
+    <div class="big-alert">
 
     <h1 style="color:white;">
     🚨 TREMOR DETECTED
     </h1>
 
     <h2 style="color:#fecaca;">
-    Dominant Frequency : {freq:.2f} Hz
+    {freq:.2f} Hz
     </h2>
+
+    <h3 style="color:#fca5a5;">
+    Severity : {severity}
+    </h3>
 
     </div>
     """, unsafe_allow_html=True)
@@ -170,13 +293,7 @@ if 3 <= freq <= 7:
 else:
 
     st.markdown("""
-    <div style="
-        background:#052e16;
-        padding:25px;
-        border-radius:15px;
-        border:3px solid #22c55e;
-        text-align:center;
-    ">
+    <div class="ok-box">
 
     <h2 style="color:#bbf7d0;">
     ✅ Normal Signal
@@ -198,45 +315,175 @@ c1.metric(
 
 c2.metric(
     "Band Power",
-    f"{st.session_state.power:.4f}"
+    f"{power:.4f}"
 )
 
 c3.metric(
     "Status",
-    "Tremor" if st.session_state.tremor else "Normal"
+    "Tremor" if 3 <= freq <= 7 else "Normal"
 )
 
 # =========================================
-# LIVE SIGNAL GRAPH
+# TABS
 # =========================================
 
-st.subheader(
-    "📈 Live TENG Signal"
-)
+tabs = st.tabs([
+    "📈 Live Signal",
+    "⚙️ Signal Processing",
+    "🔬 FFT Spectrum"
+])
 
-fig = go.Figure()
+# =========================================
+# LIVE SIGNAL
+# =========================================
 
-fig.add_trace(
-    go.Scatter(
-        x=list(st.session_state.times),
-        y=list(st.session_state.voltages),
-        mode="lines",
-        line=dict(color="cyan"),
-        name="Voltage"
+with tabs[0]:
+
+    fig1, ax1 = plt.subplots(
+        figsize=(14,4)
     )
-)
 
-fig.update_layout(
-    template="plotly_dark",
-    height=450,
-    xaxis_title="Time (s)",
-    yaxis_title="Voltage (V)"
-)
+    fig1.patch.set_facecolor(
+        '#020617'
+    )
 
-st.plotly_chart(
-    fig,
-    use_container_width=True
-)
+    ax1.set_facecolor(
+        '#0f172a'
+    )
+
+    ax1.plot(
+        t,
+        sig,
+        color='cyan',
+        linewidth=1.2
+    )
+
+    ax1.set_title(
+        'Live TENG Signal',
+        color='white'
+    )
+
+    ax1.set_xlabel(
+        'Time (s)',
+        color='white'
+    )
+
+    ax1.set_ylabel(
+        'Voltage (V)',
+        color='white'
+    )
+
+    ax1.tick_params(
+        colors='white'
+    )
+
+    ax1.grid(alpha=0.2)
+
+    st.pyplot(fig1)
+
+# =========================================
+# SIGNAL PROCESSING
+# =========================================
+
+with tabs[1]:
+
+    fig2, ax2 = plt.subplots(
+        figsize=(14,4)
+    )
+
+    fig2.patch.set_facecolor(
+        '#020617'
+    )
+
+    ax2.set_facecolor(
+        '#0f172a'
+    )
+
+    ax2.plot(
+        sig,
+        color='lime'
+    )
+
+    ax2.set_title(
+        'Processed Signal',
+        color='white'
+    )
+
+    ax2.tick_params(
+        colors='white'
+    )
+
+    ax2.grid(alpha=0.2)
+
+    st.pyplot(fig2)
+
+# =========================================
+# FFT
+# =========================================
+
+with tabs[2]:
+
+    if len(sig) >= 128:
+
+        fig3, ax3 = plt.subplots(
+            figsize=(14,4)
+        )
+
+        fig3.patch.set_facecolor(
+            '#020617'
+        )
+
+        ax3.set_facecolor(
+            '#0f172a'
+        )
+
+        ax3.plot(
+            freqs,
+            amps,
+            color='deepskyblue',
+            linewidth=1.5
+        )
+
+        ax3.axvspan(
+            3,
+            7,
+            color='red',
+            alpha=0.15,
+            label='Tremor Band'
+        )
+
+        ax3.plot(
+            freq,
+            power,
+            'ro'
+        )
+
+        ax3.set_xlim(0,12)
+
+        ax3.set_title(
+            'FFT Spectrum',
+            color='white'
+        )
+
+        ax3.set_xlabel(
+            'Frequency (Hz)',
+            color='white'
+        )
+
+        ax3.set_ylabel(
+            'Amplitude',
+            color='white'
+        )
+
+        ax3.tick_params(
+            colors='white'
+        )
+
+        ax3.legend()
+
+        ax3.grid(alpha=0.2)
+
+        st.pyplot(fig3)
 
 # =========================================
 # AUTO REFRESH
