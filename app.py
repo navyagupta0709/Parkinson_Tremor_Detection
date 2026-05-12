@@ -1,19 +1,19 @@
-# =========================
+# ================================
 # app.py
-# =========================
+# REAL LIVE TENG FFT DASHBOARD
+# ================================
 
 import streamlit as st
 import numpy as np
-import pandas as pd
 import plotly.graph_objects as go
 import paho.mqtt.client as mqtt
 import json
-import time
 from collections import deque
+import time
 
-# ---------------------------------------------------
-# PAGE CONFIG
-# ---------------------------------------------------
+# =========================================
+# PAGE
+# =========================================
 
 st.set_page_config(
     page_title="TENG Tremor Detection",
@@ -21,88 +21,70 @@ st.set_page_config(
     layout="wide"
 )
 
-# ---------------------------------------------------
+# =========================================
 # SESSION STATE
-# ---------------------------------------------------
-
-if "voltages" not in st.session_state:
-    st.session_state.voltages = deque(maxlen=500)
+# =========================================
 
 if "times" not in st.session_state:
     st.session_state.times = deque(maxlen=500)
 
-if "dominant_freq" not in st.session_state:
-    st.session_state.dominant_freq = 0.0
+if "voltages" not in st.session_state:
+    st.session_state.voltages = deque(maxlen=500)
 
-if "band_power" not in st.session_state:
-    st.session_state.band_power = 0.0
+if "freq" not in st.session_state:
+    st.session_state.freq = 0.0
 
-if "tremor_active" not in st.session_state:
-    st.session_state.tremor_active = False
+if "power" not in st.session_state:
+    st.session_state.power = 0.0
 
-if "severity" not in st.session_state:
-    st.session_state.severity = "Normal"
+if "tremor" not in st.session_state:
+    st.session_state.tremor = False
 
-# ---------------------------------------------------
-# MQTT CONFIG
-# ---------------------------------------------------
+if "connected" not in st.session_state:
+    st.session_state.connected = False
+
+# =========================================
+# MQTT
+# =========================================
 
 BROKER = "broker.hivemq.com"
 PORT = 1883
-MQTT_TOPIC = "tremorwatch/data/navya"
+TOPIC = "teng/live/navya"
 
-# ---------------------------------------------------
-# MQTT CALLBACK
-# ---------------------------------------------------
+# =========================================
+# CALLBACK
+# =========================================
 
 def on_message(client, userdata, msg):
 
     try:
-        d = json.loads(msg.payload.decode())
+
+        d = json.loads(
+            msg.payload.decode()
+        )
+
+        st.session_state.times.append(
+            d["time"]
+        )
+
+        st.session_state.voltages.append(
+            d["voltage"]
+        )
+
+        st.session_state.freq = d["freq"]
+
+        st.session_state.power = d["power"]
+
+        st.session_state.tremor = d["tremor"]
+
+        st.session_state.connected = True
 
     except:
-        return
+        pass
 
-    st.session_state.voltages.append(
-        d.get("voltage", 0.0)
-    )
-
-    st.session_state.times.append(
-        d.get("time", 0.0)
-    )
-
-    st.session_state.dominant_freq = d.get(
-        "freq",
-        0.0
-    )
-
-    st.session_state.band_power = d.get(
-        "power",
-        0.0
-    )
-
-    st.session_state.tremor_active = d.get(
-        "tremor",
-        False
-    )
-
-    freq = st.session_state.dominant_freq
-
-    if 3 <= freq < 4:
-        st.session_state.severity = "Mild"
-
-    elif 4 <= freq < 5.5:
-        st.session_state.severity = "Moderate"
-
-    elif 5.5 <= freq <= 7:
-        st.session_state.severity = "Severe"
-
-    else:
-        st.session_state.severity = "Normal"
-
-# ---------------------------------------------------
+# =========================================
 # MQTT CLIENT
-# ---------------------------------------------------
+# =========================================
 
 client = mqtt.Client()
 
@@ -116,17 +98,21 @@ try:
         60
     )
 
-    client.subscribe(MQTT_TOPIC)
+    client.subscribe(
+        TOPIC
+    )
 
     client.loop_start()
 
 except:
 
-    st.error("MQTT Connection Failed")
+    st.error(
+        "MQTT connection failed"
+    )
 
-# ---------------------------------------------------
-# UI
-# ---------------------------------------------------
+# =========================================
+# HEADER
+# =========================================
 
 st.title(
     "⚡ TENG Parkinson Tremor Detection"
@@ -136,21 +122,38 @@ st.caption(
     "Real-Time FFT Spectrum Analysis"
 )
 
-# ---------------------------------------------------
-# ALERT
-# ---------------------------------------------------
+# =========================================
+# CONNECTION STATUS
+# =========================================
 
-freq = st.session_state.dominant_freq
+if st.session_state.connected:
+
+    st.success(
+        "🟢 Arduino Connected — Live Data Streaming"
+    )
+
+else:
+
+    st.warning(
+        "🟡 Waiting for Arduino Data..."
+    )
+
+# =========================================
+# ALERT SYSTEM
+# =========================================
+
+freq = st.session_state.freq
 
 if 3 <= freq <= 7:
 
     st.markdown(f"""
     <div style="
         background:#7f1d1d;
-        padding:25px;
+        padding:30px;
         border-radius:15px;
-        border:3px solid red;
+        border:4px solid red;
         text-align:center;
+        animation: blinker 1s linear infinite;
     ">
 
     <h1 style="color:white;">
@@ -158,25 +161,33 @@ if 3 <= freq <= 7:
     </h1>
 
     <h2 style="color:#fecaca;">
-    {freq:.2f} Hz
+    Dominant Frequency : {freq:.2f} Hz
     </h2>
-
-    <h3 style="color:#fca5a5;">
-    Severity : {st.session_state.severity}
-    </h3>
 
     </div>
     """, unsafe_allow_html=True)
 
 else:
 
-    st.success(
-        "✅ Signal Normal — No Tremor Detected"
-    )
+    st.markdown("""
+    <div style="
+        background:#052e16;
+        padding:25px;
+        border-radius:15px;
+        border:3px solid #22c55e;
+        text-align:center;
+    ">
 
-# ---------------------------------------------------
+    <h2 style="color:#bbf7d0;">
+    ✅ Normal Signal
+    </h2>
+
+    </div>
+    """, unsafe_allow_html=True)
+
+# =========================================
 # METRICS
-# ---------------------------------------------------
+# =========================================
 
 c1, c2, c3 = st.columns(3)
 
@@ -187,17 +198,21 @@ c1.metric(
 
 c2.metric(
     "Band Power",
-    f"{st.session_state.band_power:.4f}"
+    f"{st.session_state.power:.4f}"
 )
 
 c3.metric(
     "Status",
-    st.session_state.severity
+    "Tremor" if st.session_state.tremor else "Normal"
 )
 
-# ---------------------------------------------------
+# =========================================
 # LIVE SIGNAL GRAPH
-# ---------------------------------------------------
+# =========================================
+
+st.subheader(
+    "📈 Live TENG Signal"
+)
 
 fig = go.Figure()
 
@@ -206,22 +221,26 @@ fig.add_trace(
         x=list(st.session_state.times),
         y=list(st.session_state.voltages),
         mode="lines",
-        name="TENG Signal"
+        line=dict(color="cyan"),
+        name="Voltage"
     )
 )
 
 fig.update_layout(
     template="plotly_dark",
-    title="Live Voltage Waveform",
+    height=450,
     xaxis_title="Time (s)",
-    yaxis_title="Voltage (V)",
-    height=400
+    yaxis_title="Voltage (V)"
 )
 
 st.plotly_chart(
     fig,
     use_container_width=True
 )
+
+# =========================================
+# AUTO REFRESH
+# =========================================
 
 time.sleep(1)
 
