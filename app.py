@@ -1,9 +1,8 @@
 """
-IEEE LEVEL TENG PARKINSON TREMOR DETECTION SYSTEM
-Realtime Arduino + FFT + AI Dashboard
+REALTIME IEEE LEVEL TENG PARKINSON TREMOR DETECTION SYSTEM
+LIVE Arduino + FFT + AI Dashboard
 
-UPLOAD ARDUINO CODE FIRST
-THEN RUN:
+RUN:
 streamlit run app.py
 """
 
@@ -14,15 +13,15 @@ import streamlit as st
 import serial
 import serial.tools.list_ports
 import numpy as np
-import pandas as pd
 import plotly.graph_objects as go
-import time
-import threading
-from collections import deque
 from scipy.fft import fft, fftfreq
 from scipy.signal import butter, filtfilt
-from datetime import datetime
+from collections import deque
+import threading
 import queue
+import time
+from datetime import datetime
+import pandas as pd
 
 # =========================================================
 # PAGE CONFIG
@@ -30,75 +29,66 @@ import queue
 st.set_page_config(
     page_title="TENG Tremor Dashboard",
     page_icon="🧠",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    layout="wide"
 )
 
 # =========================================================
-# CUSTOM CSS
+# CSS
 # =========================================================
 st.markdown("""
 <style>
 
 .stApp{
-    background:#06111f;
+    background:#07111f;
     color:white;
 }
 
-/* MAIN HEADER */
-.main-header{
-    text-align:center;
-    padding:15px;
-    background:#081a2f;
-    border-radius:15px;
-    border:1px solid #103b68;
-    margin-bottom:20px;
-}
-
 .main-title{
+    text-align:center;
     font-size:38px;
     font-weight:800;
     color:white;
 }
 
 .sub-title{
-    color:#9db4d1;
+    text-align:center;
+    color:#8ea5c0;
     font-size:15px;
+    margin-bottom:20px;
 }
 
-/* ALERTS */
 .red-alert{
     background:rgba(255,0,0,0.12);
     border:2px solid red;
+    padding:20px;
     border-radius:12px;
-    padding:18px;
+    text-align:center;
     color:#ff4d4d;
     font-size:28px;
     font-weight:bold;
-    text-align:center;
-    animation: blink 1s infinite;
+    animation:blink 1s infinite;
 }
 
 .orange-alert{
     background:rgba(255,165,0,0.12);
     border:2px solid orange;
+    padding:20px;
     border-radius:12px;
-    padding:18px;
-    color:orange;
-    font-size:26px;
-    font-weight:bold;
     text-align:center;
+    color:orange;
+    font-size:25px;
+    font-weight:bold;
 }
 
 .green-alert{
     background:rgba(0,255,127,0.12);
     border:2px solid #00ff7f;
+    padding:20px;
     border-radius:12px;
-    padding:18px;
-    color:#00ff7f;
-    font-size:24px;
-    font-weight:bold;
     text-align:center;
+    color:#00ff7f;
+    font-size:22px;
+    font-weight:bold;
 }
 
 @keyframes blink{
@@ -107,37 +97,8 @@ st.markdown("""
     }
 }
 
-/* METRIC CARDS */
-.metric-box{
-    background:#081726;
-    padding:18px;
-    border-radius:12px;
-    border:1px solid #12375e;
-    text-align:center;
-}
-
-.metric-value{
-    font-size:40px;
-    font-weight:bold;
-    color:white;
-}
-
-.metric-label{
-    color:#9db4d1;
-    font-size:15px;
-}
-
-/* SIDEBAR */
 [data-testid="stSidebar"]{
-    background:#08111f;
-}
-
-/* LOG TABLE */
-.log-box{
     background:#081726;
-    border-radius:12px;
-    padding:10px;
-    border:1px solid #103b68;
 }
 
 </style>
@@ -149,31 +110,25 @@ st.markdown("""
 if "running" not in st.session_state:
     st.session_state.running = False
 
-if "signal" not in st.session_state:
-    st.session_state.signal = deque(maxlen=500)
-
-if "fft_freq" not in st.session_state:
-    st.session_state.fft_freq = 0
-
-if "severity" not in st.session_state:
-    st.session_state.severity = 0
-
-if "label" not in st.session_state:
-    st.session_state.label = "NORMAL"
-
-if "logs" not in st.session_state:
-    st.session_state.logs = []
-
 if "connected" not in st.session_state:
     st.session_state.connected = False
 
-# =========================================================
-# DATA QUEUE
-# =========================================================
-data_queue = queue.Queue()
+if "signal_buffer" not in st.session_state:
+    st.session_state.signal_buffer = deque(maxlen=512)
+
+if "freq_history" not in st.session_state:
+    st.session_state.freq_history = deque(maxlen=100)
+
+if "severity_history" not in st.session_state:
+    st.session_state.severity_history = deque(maxlen=100)
 
 # =========================================================
-# SERIAL PORT DETECTION
+# SERIAL QUEUE
+# =========================================================
+serial_queue = queue.Queue()
+
+# =========================================================
+# DETECT PORTS
 # =========================================================
 def detect_ports():
 
@@ -184,7 +139,7 @@ def detect_ports():
 # =========================================================
 # SERIAL THREAD
 # =========================================================
-def serial_thread(port, baudrate):
+def serial_reader(port, baudrate):
 
     try:
 
@@ -206,7 +161,7 @@ def serial_thread(port, baudrate):
 
                     value = float(line)
 
-                    data_queue.put(value)
+                    serial_queue.put(value)
 
             except:
                 pass
@@ -218,32 +173,34 @@ def serial_thread(port, baudrate):
         st.session_state.connected = False
 
 # =========================================================
-# LOW PASS FILTER
+# FILTER
 # =========================================================
-def lowpass(data):
+def lowpass_filter(data):
 
     if len(data) < 20:
         return np.array(data)
 
     b, a = butter(
         3,
-        0.2,
+        0.15,
         btype='low'
     )
 
-    return filtfilt(
+    filtered = filtfilt(
         b,
         a,
         data
     )
 
+    return filtered
+
 # =========================================================
-# FFT ANALYSIS
+# FFT
 # =========================================================
-def perform_fft(signal):
+def calculate_fft(signal):
 
     if len(signal) < 128:
-        return 0
+        return 0, [], []
 
     fs = 100
 
@@ -261,41 +218,41 @@ def perform_fft(signal):
 
     dominant = xf[np.argmax(yf)]
 
-    return dominant
+    return dominant, xf, yf
 
 # =========================================================
-# AI PREDICTION
+# AI DETECTION
 # =========================================================
-def ai_predict(freq):
+def detect_tremor(freq):
 
     if freq < 3:
 
-        return "NORMAL", 15
+        return "NORMAL", 12
 
     elif freq < 5:
 
-        return "MILD TREMOR", 58
+        return "MILD TREMOR", 55
 
     else:
 
-        return "SEVERE TREMOR", 92
+        return "SEVERE TREMOR", 91
 
 # =========================================================
 # HEADER
 # =========================================================
 st.markdown("""
-<div class="main-header">
-
 <div class="main-title">
-TENG BASED PARKINSON TREMOR DETECTION SYSTEM
-</div>
-
-<div class="sub-title">
-IEEE Level Real-Time IoT Monitoring Dashboard
-</div>
-
+🧠 TENG BASED PARKINSON TREMOR DETECTION SYSTEM
 </div>
 """, unsafe_allow_html=True)
+
+st.markdown("""
+<div class="sub-title">
+IEEE Level Realtime IoT Monitoring Dashboard
+</div>
+""", unsafe_allow_html=True)
+
+st.markdown("---")
 
 # =========================================================
 # SIDEBAR
@@ -308,7 +265,7 @@ with st.sidebar:
 
     selected_port = st.selectbox(
         "COM Port",
-        ports if ports else ["No Device"]
+        ports if ports else ["NO DEVICE"]
     )
 
     baudrate = st.selectbox(
@@ -319,25 +276,25 @@ with st.sidebar:
     st.markdown("---")
 
     if st.session_state.connected:
-
         st.success("CONNECTED")
-
     else:
-
         st.error("DISCONNECTED")
 
     st.markdown("---")
 
     if not st.session_state.running:
 
-        if st.button("START", use_container_width=True):
+        if st.button(
+            "START",
+            use_container_width=True
+        ):
 
-            if selected_port != "No Device":
+            if selected_port != "NO DEVICE":
 
                 st.session_state.running = True
 
                 thread = threading.Thread(
-                    target=serial_thread,
+                    target=serial_reader,
                     args=(selected_port, baudrate),
                     daemon=True
                 )
@@ -346,61 +303,64 @@ with st.sidebar:
 
     else:
 
-        if st.button("STOP", use_container_width=True):
+        if st.button(
+            "STOP",
+            use_container_width=True
+        ):
 
             st.session_state.running = False
 
-    st.markdown("---")
-
-    st.markdown("## SYSTEM INFO")
-
-    st.write("Arduino UNO")
-    st.write("TENG v1.0")
-    st.write("FFT Enabled")
-    st.write("AI Detection Active")
-
 # =========================================================
-# READ REALTIME DATA
+# REALTIME SERIAL DATA
 # =========================================================
-while not data_queue.empty():
+while not serial_queue.empty():
 
-    val = data_queue.get()
+    val = serial_queue.get()
 
-    st.session_state.signal.append(val)
+    st.session_state.signal_buffer.append(val)
 
 # =========================================================
 # SIGNAL PROCESSING
 # =========================================================
-signal = np.array(st.session_state.signal)
+signal = np.array(
+    st.session_state.signal_buffer
+)
 
-if len(signal) > 20:
+if len(signal) > 128:
 
-    filtered = lowpass(signal)
+    filtered = lowpass_filter(signal)
 
-    freq = perform_fft(filtered)
+    freq, xf, yf = calculate_fft(filtered)
 
-    label, severity = ai_predict(freq)
+    label, severity = detect_tremor(freq)
 
     voltage = np.mean(filtered)
 
     amplitude = np.max(filtered) - np.min(filtered)
 
-    st.session_state.fft_freq = freq
-    st.session_state.severity = severity
-    st.session_state.label = label
+    rms = np.sqrt(np.mean(filtered**2))
+
+    st.session_state.freq_history.append(freq)
+
+    st.session_state.severity_history.append(severity)
 
 else:
 
-    filtered = np.zeros(100)
+    filtered = np.zeros(512)
+
+    xf = np.zeros(512)
+
+    yf = np.zeros(512)
 
     freq = 0
+    severity = 0
     voltage = 0
     amplitude = 0
-    severity = 0
+    rms = 0
     label = "WAITING"
 
 # =========================================================
-# ALERT BANNER
+# ALERTS
 # =========================================================
 if label == "SEVERE TREMOR":
 
@@ -408,7 +368,7 @@ if label == "SEVERE TREMOR":
     <div class="red-alert">
     🚨 TREMOR DETECTED
     <br>
-    Severity: SEVERE
+    SEVERITY: SEVERE
     <br>
     Tremor Frequency: {freq:.2f} Hz
     </div>
@@ -426,7 +386,7 @@ elif label == "MILD TREMOR":
 
 else:
 
-    st.markdown(f"""
+    st.markdown("""
     <div class="green-alert">
     ✅ NO PATHOLOGICAL TREMOR DETECTED
     </div>
@@ -437,36 +397,36 @@ st.markdown("")
 # =========================================================
 # METRICS
 # =========================================================
-c1, c2, c3, c4, c5 = st.columns(5)
+m1, m2, m3, m4, m5 = st.columns(5)
 
-with c1:
+with m1:
     st.metric(
         "TENG VOLTAGE",
         f"{voltage:.2f} V"
     )
 
-with c2:
+with m2:
     st.metric(
         "TREMOR FREQUENCY",
         f"{freq:.2f} Hz"
     )
 
-with c3:
+with m3:
     st.metric(
-        "TREMOR AMPLITUDE",
+        "AMPLITUDE",
         f"{amplitude:.2f}"
     )
 
-with c4:
+with m4:
     st.metric(
         "SEVERITY INDEX",
         f"{severity}%"
     )
 
-with c5:
+with m5:
     st.metric(
-        "SIGNAL QUALITY",
-        "95%"
+        "RMS SIGNAL",
+        f"{rms:.2f}"
     )
 
 st.markdown("---")
@@ -491,7 +451,7 @@ with left:
                 color='#00d4ff',
                 width=2
             ),
-            name='TENG Voltage'
+            name='TENG Signal'
         )
     )
 
@@ -509,30 +469,9 @@ with left:
     )
 
 # =========================================================
-# FFT
+# FFT SPECTRUM
 # =========================================================
 with middle:
-
-    if len(filtered) > 20:
-
-        fs = 100
-
-        N = len(filtered)
-
-        yf = fft(filtered)
-
-        xf = fftfreq(N, 1/fs)
-
-        positive = xf >= 0
-
-        xf = xf[positive]
-
-        yf = np.abs(yf[positive])
-
-    else:
-
-        xf = np.zeros(100)
-        yf = np.zeros(100)
 
     fig2 = go.Figure()
 
@@ -544,7 +483,8 @@ with middle:
             line=dict(
                 color='orange',
                 width=2
-            )
+            ),
+            name='FFT'
         )
     )
 
@@ -554,6 +494,12 @@ with middle:
         fillcolor='red',
         opacity=0.2,
         annotation_text='Pathological Tremor Band'
+    )
+
+    fig2.add_vline(
+        x=freq,
+        line_dash="dash",
+        line_color="red"
     )
 
     fig2.update_layout(
@@ -570,31 +516,26 @@ with middle:
     )
 
 # =========================================================
-# TREND
+# TREND GRAPH
 # =========================================================
 with right:
-
-    severity_history = np.random.randint(
-        max(severity-10,0),
-        severity+5,
-        50
-    )
 
     fig3 = go.Figure()
 
     fig3.add_trace(
         go.Scatter(
-            y=severity_history,
+            y=list(st.session_state.severity_history),
             mode='lines',
             line=dict(
                 color='red',
                 width=2
-            )
+            ),
+            name='Severity'
         )
     )
 
     fig3.update_layout(
-        title="TREMOR AMPLITUDE TREND",
+        title="TREMOR SEVERITY TREND",
         template="plotly_dark",
         height=380,
         paper_bgcolor='#081726',
@@ -611,19 +552,23 @@ with right:
 # =========================================================
 b1, b2, b3 = st.columns(3)
 
+# =========================================================
+# SEVERITY
+# =========================================================
 with b1:
 
     st.subheader("TREMOR SEVERITY")
 
-    st.progress(
-        int(severity)
-    )
+    st.progress(int(severity))
 
     st.markdown(f"""
     ## {severity}%
     ### {label}
     """)
 
+# =========================================================
+# AI CLASSIFICATION
+# =========================================================
 with b2:
 
     st.subheader("AI CLASSIFICATION")
@@ -631,12 +576,15 @@ with b2:
     st.write("NORMAL")
     st.progress(10)
 
-    st.write("MILD")
-    st.progress(35)
+    st.write("MILD TREMOR")
+    st.progress(40)
 
-    st.write("SEVERE")
+    st.write("SEVERE TREMOR")
     st.progress(int(severity))
 
+# =========================================================
+# FEATURES
+# =========================================================
 with b3:
 
     st.subheader("FEATURES")
@@ -644,7 +592,26 @@ with b3:
     st.write(f"Mean Voltage : {voltage:.2f}V")
     st.write(f"Dominant Frequency : {freq:.2f}Hz")
     st.write(f"Peak Amplitude : {amplitude:.2f}")
-    st.write(f"Signal RMS : {np.sqrt(np.mean(filtered**2)):.2f}")
+    st.write(f"RMS : {rms:.2f}")
+
+# =========================================================
+# LOG TABLE
+# =========================================================
+st.markdown("---")
+
+st.subheader("ALERT LOG")
+
+log_df = pd.DataFrame({
+    "Time": [datetime.now().strftime("%H:%M:%S")],
+    "Severity": [label],
+    "Frequency": [round(freq,2)],
+    "Amplitude": [round(amplitude,2)]
+})
+
+st.dataframe(
+    log_df,
+    use_container_width=True
+)
 
 # =========================================================
 # AUTO REFRESH
