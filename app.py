@@ -394,15 +394,22 @@ def _render_sidebar():
         st.markdown("---")
 
         # ── Port detection ────────────────────────────────────────
-        st.subheader("⚙️ Serial Connection")
-        auto_ports = list_arduino_ports()
-        port_opts  = (auto_ports if auto_ports else []) + ["Manual…", "Demo Mode"]
-        sel = st.selectbox("COM Port", port_opts, index=0 if auto_ports else 2)
+        # ── Port detection ────────────────────────────────────────
+st.subheader("⚙️ Serial Connection")
 
-        if sel == "Manual…":
-            sel = st.text_input("Enter port (e.g. COM3 / /dev/ttyUSB0)",
-                                value=st.session_state.manual_port)
-            st.session_state.manual_port = sel
+auto_ports = list_arduino_ports()
+port_opts  = (auto_ports if auto_ports else []) + ["Manual…", "Demo Mode"]
+
+default_index = 0
+
+if not auto_ports and len(port_opts) > 1:
+    default_index = len(port_opts) - 1
+
+sel = st.selectbox(
+    "COM Port",
+    port_opts,
+    index=default_index
+)
 
         # ── Start / Stop ──────────────────────────────────────────
         st.markdown("")
