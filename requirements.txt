@@ -1,4 +1,7 @@
-flask>=3.0.0
-pyserial>=3.5
-numpy>=1.24.0
-reportlab>=4.0.0
+streamlit
+numpy
+pandas
+matplotlib
+scipy
+pyserial
+plotly
