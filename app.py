@@ -412,6 +412,7 @@ sel = st.selectbox(
 )
 
         # ── Start / Stop ──────────────────────────────────────────
+
         st.markdown("")
         col_a, col_b = st.columns(2)
         with col_a:
