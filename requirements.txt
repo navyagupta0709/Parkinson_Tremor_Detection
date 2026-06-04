@@ -1,7 +1,10 @@
 streamlit
+pyserial
 numpy
 pandas
 scipy
 scikit-learn
 joblib
 plotly
+openpyxl
+nbformat
