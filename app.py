@@ -192,7 +192,7 @@ os.makedirs("logs", exist_ok=True)
 # ═══════════════════════════════════════════════════════════════════════════
 # LOAD MODEL  (auto-trains if missing)
 # ═══════════════════════════════════════════════════════════════════════════
-@st.cache_resource(show_spinner="🧠 Loading RF model…")
+@st.cache_resource(show_spinner="🧠")
 def get_model():
     return load_model()
 
@@ -247,7 +247,6 @@ def log_row(ts, raw, freq, label, conf):
 # ═══════════════════════════════════════════════════════════════════════════
 with st.sidebar:
     st.markdown("## 🧠 Parkinson's Monitor")
-    st.markdown("**IEEE Biomedical**")
     st.markdown("---")
 
     # ── Cloud / no-pyserial notice ────────────────────────────
