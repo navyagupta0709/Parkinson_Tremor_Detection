@@ -2,7 +2,7 @@
 app.py
 ======
 Parkinson's Tremor Real-Time Detection Dashboard
-IEEE Biomedical Grade
+
 
 Hardware pipeline:
     TENG/Piezo sensor → Arduino A0 → sketch_feb18a.ino → Serial 9600 baud
