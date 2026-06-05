@@ -1,81 +1,103 @@
 """
 signal_processing.py
-Exact pipeline from Parkinson_Tremor_Detection notebook (Cells 5,7,9,11)
-FS=100 Hz, WINDOW=200 samples, Butterworth bandpass 0.5–10 Hz
+====================
+Exact signal processing pipeline from Parkinson_Tremor_Detection notebook.
+
+Arduino sketch_feb18a.ino sends:
+    "<time_s> <voltage_V>\n"   at 100 Hz, 9600 baud
+    e.g.  "1.230 2.4812"
+
+This module:
+  1. Pre-processes raw voltage windows (DC removal → detrend → bandpass → smooth)
+  2. Extracts 8 features used by the ML model
+  3. Computes FFT spectrum for display
 """
 
 import numpy as np
-from scipy.fft import fft, fftfreq
-from scipy.signal import butter, sosfiltfilt, detrend, savgol_filter, welch
+from scipy.fft       import fft, fftfreq
+from scipy.signal    import butter, sosfiltfilt, detrend, savgol_filter, welch
 
-FS          = 100.0    # Arduino: 10 ms interval → 100 Hz
-WINDOW_SIZE = 200      # 2-second window
-STEP_SIZE   = 100      # 50% overlap
-FEAT_COLS   = ['mean','std','rms','energy','dom_freq','sp_entropy','psd_peak','band_power']
+# ── constants matching Arduino + notebook ─────────────────────
+FS          = 100.0   # sketch_feb18a: samplingInterval = 10ms → 100 Hz
+WINDOW_SIZE = 200     # 2-second analysis window
+STEP_SIZE   = 100     # 50 % overlap
 
-# Parkinson's resting tremor: 3–7 Hz
-TREMOR_LO = 3.0
-TREMOR_HI = 7.0
+# Parkinson's resting tremor band (ICD-10 clinical definition)
+TREMOR_LO = 3.0       # Hz
+TREMOR_HI = 7.0       # Hz
 
-
-# ─────────────────────────────────────────────
-# Cell 5: Outlier removal
-# ─────────────────────────────────────────────
-def remove_outliers(sig: np.ndarray) -> np.ndarray:
-    q1, q3 = np.percentile(sig, [25, 75])
-    iqr     = q3 - q1
-    return sig[(sig >= q1 - 3*iqr) & (sig <= q3 + 3*iqr)]
+# 8 feature names (must match train_model.py FEAT_COLS)
+FEAT_COLS = [
+    'mean', 'std', 'rms', 'energy',
+    'dom_freq', 'sp_entropy', 'psd_peak', 'band_power',
+]
 
 
-# ─────────────────────────────────────────────
-# Cell 7: Signal processing pipeline (SOP)
-# ─────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────
+# 1.  Signal Pre-processing  (notebook Cell 7)
+# ──────────────────────────────────────────────────────────────
 def process_signal(sig: np.ndarray, fs: float = FS) -> np.ndarray:
     """
-    1. DC offset removal
-    2. Detrend
-    3. 4th-order Butterworth bandpass 0.5–10 Hz
-    4. Savitzky-Golay smoothing (win=11, poly=3)
+    Full SOP pipeline:
+      1. DC offset removal  (subtract mean)
+      2. Detrend            (remove slow baseline drift)
+      3. Butterworth bandpass  0.5 – 10 Hz, 4th order
+      4. Savitzky-Golay smoothing  (window=11, poly=3)
     """
     s = sig.astype(float).copy()
     if len(s) < 20:
         return s
-    s -= np.mean(s)
-    s  = detrend(s)
-    try:
-        sos = butter(4, [0.5, 10.0], btype='bandpass', fs=fs, output='sos')
-        s   = sosfiltfilt(sos, s)
-        s   = savgol_filter(s, window_length=11, polyorder=3)
-    except Exception:
-        pass
+    s -= np.mean(s)                                              # DC removal
+    s  = detrend(s)                                              # detrend
+    sos = butter(4, [0.5, 10.0], btype='bandpass',
+                 fs=fs, output='sos')
+    s   = sosfiltfilt(sos, s)                                    # bandpass
+    s   = savgol_filter(s, window_length=11, polyorder=3)        # smooth
     return s
 
 
-# ─────────────────────────────────────────────
-# Cell 9: Feature extraction (exact 8 features)
-# ─────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────
+# 2.  Feature Extraction  (notebook Cell 9)
+# ──────────────────────────────────────────────────────────────
+def _trapz(y: np.ndarray, x: np.ndarray) -> float:
+    """numpy-version-safe trapezoidal integration."""
+    fn = getattr(np, 'trapezoid',
+                 getattr(np, 'trapz',
+                         lambda y, x: float(np.sum((y[:-1]+y[1:]) * np.diff(x) / 2))))
+    return float(fn(y, x))
+
+
 def extract_features(window: np.ndarray, fs: float = FS) -> dict:
-    _trapz = getattr(np, 'trapezoid', getattr(np, 'trapz', None)) or (lambda y,x: np.sum((y[:-1]+y[1:])*np.diff(x)/2))
-    n      = len(window)
+    """
+    Extracts the 8 features used by the RF / SVM / KNN models.
+    Window should already be processed by process_signal().
+    """
+    n = len(window)
 
-    mean    = float(np.mean(window))
-    std     = float(np.std(window, ddof=1))
-    rms     = float(np.sqrt(np.mean(window**2)))
-    energy  = float(np.sum(window**2) / n)
+    # time-domain
+    mean   = float(np.mean(window))
+    std    = float(np.std(window, ddof=1))
+    rms    = float(np.sqrt(np.mean(window ** 2)))
+    energy = float(np.sum(window ** 2) / n)
 
-    freqs     = fftfreq(n, d=1.0/fs)
-    fft_vals  = np.abs(fft(window))
-    pos       = freqs > 0
-    fp, fv    = freqs[pos], fft_vals[pos]
-    dom_freq  = float(fp[np.argmax(fv)]) if len(fp) else 0.0
+    # FFT — dominant frequency
+    freqs    = fftfreq(n, d=1.0 / fs)
+    fft_vals = np.abs(fft(window))
+    pos      = freqs > 0
+    fp, fv   = freqs[pos], fft_vals[pos]
+    dom_freq = float(fp[np.argmax(fv)]) if len(fp) else 0.0
 
+    # spectral entropy
     psd_norm   = fv / (fv.sum() + 1e-12)
     sp_entropy = float(-np.sum(psd_norm * np.log2(psd_norm + 1e-12)))
 
+    # Welch PSD
     f_w, psd  = welch(window, fs=fs, nperseg=min(n, 64))
     psd_peak  = float(np.max(psd))
-    band      = (f_w >= TREMOR_LO) & (f_w <= TREMOR_HI)
-    band_pwr  = float(_trapz(psd[band], f_w[band])) if band.any() else 0.0
+
+    # band power  3 – 7 Hz
+    band     = (f_w >= TREMOR_LO) & (f_w <= TREMOR_HI)
+    band_pwr = _trapz(psd[band], f_w[band]) if band.any() else 0.0
 
     return {
         'mean':       mean,
@@ -90,16 +112,18 @@ def extract_features(window: np.ndarray, fs: float = FS) -> dict:
 
 
 def features_to_vec(feat: dict) -> np.ndarray:
+    """Convert feature dict → numpy array in FEAT_COLS order."""
     return np.array([feat[c] for c in FEAT_COLS])
 
 
-# ─────────────────────────────────────────────
-# Cell 11: FFT spectrum
-# ─────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────
+# 3.  FFT Spectrum  (notebook Cell 11)
+# ──────────────────────────────────────────────────────────────
 def compute_fft(sig: np.ndarray, fs: float = FS):
+    """Returns (positive_freqs, magnitudes) for plotting."""
     n        = len(sig)
     fft_vals = np.abs(fft(sig))
-    freqs    = fftfreq(n, d=1.0/fs)
+    freqs    = fftfreq(n, d=1.0 / fs)
     pos      = freqs > 0
     return freqs[pos], fft_vals[pos]
 
@@ -109,15 +133,11 @@ def dominant_freq(sig: np.ndarray, fs: float = FS) -> float:
     return float(fp[np.argmax(fv)]) if len(fp) else 0.0
 
 
-# ─────────────────────────────────────────────
-# Binary classification helper
-# label2: 0=Non-Tremor (<3 Hz), 1=Tremor (≥3 Hz)
-# ─────────────────────────────────────────────
-def freq_to_binary(freq_hz: float) -> int:
-    return 1 if freq_hz >= TREMOR_LO else 0
-
-
+# ──────────────────────────────────────────────────────────────
+# 4.  Clinical helpers
+# ──────────────────────────────────────────────────────────────
 def freq_to_severity(freq_hz: float) -> str:
+    """Map dominant frequency → clinical severity label."""
     if freq_hz < TREMOR_LO:
         return "Non-Tremor"
     elif freq_hz < 4.0:
